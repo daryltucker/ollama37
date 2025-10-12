@@ -1,40 +1,41 @@
-//go:build linux || windows
-
 package discover
 
-/*
-#cgo linux LDFLAGS: -lrt -lpthread -ldl -lstdc++ -lm
-#cgo windows LDFLAGS: -lpthread
-
-#include "gpu_info.h"
-*/
-import "C"
-
 import (
-	"fmt"
+	"context"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
-	"unsafe"
 
-	"github.com/ollama/ollama/envconfig"
 	"github.com/ollama/ollama/format"
+	"github.com/ollama/ollama/ml"
 )
 
-type cudaHandles struct {
-	deviceCount int
-	cudart      *C.cudart_handle_t
-	nvcuda      *C.nvcuda_handle_t
-	nvml        *C.nvml_handle_t
+// Jetson devices have JETSON_JETPACK="x.y.z" factory set to the Jetpack version installed.
+// Included to drive logic for reducing Ollama-allocated overhead on L4T/Jetson devices.
+var CudaTegra string = os.Getenv("JETSON_JETPACK")
+
+func GetCPUInfo() GpuInfo {
+	mem, err := GetCPUMem()
+	if err != nil {
+		slog.Warn("error looking up system memory", "error", err)
+	}
+
+	return GpuInfo{
+		memInfo: mem,
+		DeviceID: ml.DeviceID{
+			Library: "cpu",
+			ID:      "0",
+		},
+	}
 }
 
-type oneapiHandles struct {
-	oneapi      *C.oneapi_handle_t
-	deviceCount int
+func GetGPUInfo(ctx context.Context, runners []FilteredRunnerDiscovery) GpuInfoList {
+	devs := GPUDevices(ctx, runners)
+	return devInfoToInfoList(devs)
 }
 
 const (
@@ -479,240 +480,142 @@ func GetGPUInfo() GpuInfoList {
 		}
 	}
 
+
+func devInfoToInfoList(devs []ml.DeviceInfo) GpuInfoList {
 	resp := []GpuInfo{}
-	for _, gpu := range cudaGPUs {
-		resp = append(resp, gpu.GpuInfo)
+	// Our current packaging model places ggml-hip in the main directory
+	// but keeps rocm in an isolated directory.  We have to add it to
+	// the [LD_LIBRARY_]PATH so ggml-hip will load properly
+	rocmDir := filepath.Join(LibOllamaPath, "rocm")
+	if _, err := os.Stat(rocmDir); err != nil {
+		rocmDir = ""
 	}
-	for _, gpu := range rocmGPUs {
-		resp = append(resp, gpu.GpuInfo)
-	}
-	for _, gpu := range oneapiGPUs {
-		resp = append(resp, gpu.GpuInfo)
+
+	for _, dev := range devs {
+		info := GpuInfo{
+			DeviceID: dev.DeviceID,
+			filterID: dev.FilteredID,
+			Name:     dev.Description,
+			memInfo: memInfo{
+				TotalMemory: dev.TotalMemory,
+				FreeMemory:  dev.FreeMemory,
+			},
+			// TODO can we avoid variant
+			DependencyPath: dev.LibraryPath,
+			DriverMajor:    dev.DriverMajor,
+			DriverMinor:    dev.DriverMinor,
+			ComputeMajor:   dev.ComputeMajor,
+			ComputeMinor:   dev.ComputeMinor,
+		}
+		if dev.Library == "CUDA" || dev.Library == "ROCm" {
+			info.MinimumMemory = 457 * format.MebiByte
+		}
+		if dev.Library == "ROCm" && rocmDir != "" {
+			info.DependencyPath = append(info.DependencyPath, rocmDir)
+		}
+		resp = append(resp, info)
 	}
 	if len(resp) == 0 {
-		resp = append(resp, cpus[0].GpuInfo)
+		mem, err := GetCPUMem()
+		if err != nil {
+			slog.Warn("error looking up system memory", "error", err)
+		}
+
+		resp = append(resp, GpuInfo{
+			memInfo: mem,
+			DeviceID: ml.DeviceID{
+				Library: "cpu",
+				ID:      "0",
+			},
+		})
 	}
 	return resp
-}
-
-func FindGPULibs(baseLibName string, defaultPatterns []string) []string {
-	// Multiple GPU libraries may exist, and some may not work, so keep trying until we exhaust them
-	gpuLibPaths := []string{}
-	slog.Debug("Searching for GPU library", "name", baseLibName)
-
-	// search our bundled libraries first
-	patterns := []string{filepath.Join(LibOllamaPath, baseLibName)}
-
-	var ldPaths []string
-	switch runtime.GOOS {
-	case "windows":
-		ldPaths = strings.Split(os.Getenv("PATH"), string(os.PathListSeparator))
-	case "linux":
-		ldPaths = strings.Split(os.Getenv("LD_LIBRARY_PATH"), string(os.PathListSeparator))
-	}
-
-	// then search the system's LD_LIBRARY_PATH
-	for _, p := range ldPaths {
-		p, err := filepath.Abs(p)
-		if err != nil {
-			continue
-		}
-		patterns = append(patterns, filepath.Join(p, baseLibName))
-	}
-
-	// finally, search the default patterns provided by the caller
-	patterns = append(patterns, defaultPatterns...)
-	slog.Debug("gpu library search", "globs", patterns)
-	for _, pattern := range patterns {
-		// Nvidia PhysX known to return bogus results
-		if strings.Contains(pattern, "PhysX") {
-			slog.Debug("skipping PhysX cuda library path", "path", pattern)
-			continue
-		}
-		// Ignore glob discovery errors
-		matches, _ := filepath.Glob(pattern)
-		for _, match := range matches {
-			// Resolve any links so we don't try the same lib multiple times
-			// and weed out any dups across globs
-			libPath := match
-			tmp := match
-			var err error
-			for ; err == nil; tmp, err = os.Readlink(libPath) {
-				if !filepath.IsAbs(tmp) {
-					tmp = filepath.Join(filepath.Dir(libPath), tmp)
-				}
-				libPath = tmp
-			}
-			new := true
-			for _, cmp := range gpuLibPaths {
-				if cmp == libPath {
-					new = false
-					break
-				}
-			}
-			if new {
-				gpuLibPaths = append(gpuLibPaths, libPath)
-			}
-		}
-	}
-	slog.Debug("discovered GPU libraries", "paths", gpuLibPaths)
-	return gpuLibPaths
-}
-
-// Bootstrap the runtime library
-// Returns: num devices, handle, libPath, error
-func loadCUDARTMgmt(cudartLibPaths []string) (int, *C.cudart_handle_t, string, error) {
-	var resp C.cudart_init_resp_t
-	resp.ch.verbose = getVerboseState()
-	var err error
-	for _, libPath := range cudartLibPaths {
-		lib := C.CString(libPath)
-		defer C.free(unsafe.Pointer(lib))
-		C.cudart_init(lib, &resp)
-		if resp.err != nil {
-			err = fmt.Errorf("Unable to load cudart library %s: %s", libPath, C.GoString(resp.err))
-			slog.Debug(err.Error())
-			C.free(unsafe.Pointer(resp.err))
-		} else {
-			err = nil
-			return int(resp.num_devices), &resp.ch, libPath, err
-		}
-	}
-	return 0, nil, "", err
-}
-
-// Bootstrap the driver library
-// Returns: num devices, handle, libPath, error
-func loadNVCUDAMgmt(nvcudaLibPaths []string) (int, *C.nvcuda_handle_t, string, error) {
-	var resp C.nvcuda_init_resp_t
-	resp.ch.verbose = getVerboseState()
-	var err error
-	for _, libPath := range nvcudaLibPaths {
-		lib := C.CString(libPath)
-		defer C.free(unsafe.Pointer(lib))
-		C.nvcuda_init(lib, &resp)
-		if resp.err != nil {
-			// Decide what log level based on the type of error message to help users understand why
-			switch resp.cudaErr {
-			case C.CUDA_ERROR_INSUFFICIENT_DRIVER, C.CUDA_ERROR_SYSTEM_DRIVER_MISMATCH:
-				err = fmt.Errorf("version mismatch between driver and cuda driver library - reboot or upgrade may be required: library %s", libPath)
-				slog.Warn(err.Error())
-			case C.CUDA_ERROR_NO_DEVICE:
-				err = fmt.Errorf("no nvidia devices detected by library %s", libPath)
-				slog.Info(err.Error())
-			case C.CUDA_ERROR_UNKNOWN:
-				err = fmt.Errorf("unknown error initializing cuda driver library %s: %s. see https://github.com/ollama/ollama/blob/main/docs/troubleshooting.md for more information", libPath, C.GoString(resp.err))
-				slog.Warn(err.Error())
-			default:
-				msg := C.GoString(resp.err)
-				if strings.Contains(msg, "wrong ELF class") {
-					slog.Debug("skipping 32bit library", "library", libPath)
-				} else {
-					err = fmt.Errorf("Unable to load cudart library %s: %s", libPath, C.GoString(resp.err))
-					slog.Info(err.Error())
-				}
-			}
-			C.free(unsafe.Pointer(resp.err))
-		} else {
-			err = nil
-			return int(resp.num_devices), &resp.ch, libPath, err
-		}
-	}
-	return 0, nil, "", err
-}
-
-// Bootstrap the management library
-// Returns: handle, libPath, error
-func loadNVMLMgmt(nvmlLibPaths []string) (*C.nvml_handle_t, string, error) {
-	var resp C.nvml_init_resp_t
-	resp.ch.verbose = getVerboseState()
-	var err error
-	for _, libPath := range nvmlLibPaths {
-		lib := C.CString(libPath)
-		defer C.free(unsafe.Pointer(lib))
-		C.nvml_init(lib, &resp)
-		if resp.err != nil {
-			err = fmt.Errorf("Unable to load NVML management library %s: %s", libPath, C.GoString(resp.err))
-			slog.Info(err.Error())
-			C.free(unsafe.Pointer(resp.err))
-		} else {
-			err = nil
-			return &resp.ch, libPath, err
-		}
-	}
-	return nil, "", err
-}
-
-// bootstrap the Intel GPU library
-// Returns: num devices, handle, libPath, error
-func loadOneapiMgmt(oneapiLibPaths []string) (int, *C.oneapi_handle_t, string, error) {
-	var resp C.oneapi_init_resp_t
-	num_devices := 0
-	resp.oh.verbose = getVerboseState()
-	var err error
-	for _, libPath := range oneapiLibPaths {
-		lib := C.CString(libPath)
-		defer C.free(unsafe.Pointer(lib))
-		C.oneapi_init(lib, &resp)
-		if resp.err != nil {
-			err = fmt.Errorf("Unable to load oneAPI management library %s: %s", libPath, C.GoString(resp.err))
-			slog.Debug(err.Error())
-			C.free(unsafe.Pointer(resp.err))
-		} else {
-			err = nil
-			for i := range resp.oh.num_drivers {
-				num_devices += int(C.oneapi_get_device_count(resp.oh, C.int(i)))
-			}
-			return num_devices, &resp.oh, libPath, err
-		}
-	}
-	return 0, nil, "", err
-}
-
-func getVerboseState() C.uint16_t {
-	if envconfig.LogLevel() < slog.LevelInfo {
-		return C.uint16_t(1)
-	}
-	return C.uint16_t(0)
 }
 
 // Given the list of GPUs this instantiation is targeted for,
 // figure out the visible devices environment variable
 //
 // If different libraries are detected, the first one is what we use
-func (l GpuInfoList) GetVisibleDevicesEnv() (string, string) {
+func (l GpuInfoList) GetVisibleDevicesEnv() []string {
 	if len(l) == 0 {
-		return "", ""
+		return nil
 	}
-	switch l[0].Library {
-	case "cuda":
-		return cudaGetVisibleDevicesEnv(l)
-	case "rocm":
-		return rocmGetVisibleDevicesEnv(l)
-	case "oneapi":
-		return oneapiGetVisibleDevicesEnv(l)
-	default:
-		slog.Debug("no filter required for library " + l[0].Library)
-		return "", ""
-	}
+	return []string{rocmGetVisibleDevicesEnv(l)}
 }
 
-func GetSystemInfo() SystemInfo {
-	gpus := GetGPUInfo()
-	gpuMutex.Lock()
-	defer gpuMutex.Unlock()
-	discoveryErrors := []string{}
-	for _, err := range bootstrapErrors {
-		discoveryErrors = append(discoveryErrors, err.Error())
+func rocmGetVisibleDevicesEnv(gpuInfo []GpuInfo) string {
+	ids := []string{}
+	for _, info := range gpuInfo {
+		if info.Library != "ROCm" {
+			continue
+		}
+		// If the devices requires a numeric ID, for filtering purposes, we use the unfiltered ID number
+		if info.filterID != "" {
+			ids = append(ids, info.filterID)
+		} else {
+			ids = append(ids, info.ID)
+		}
 	}
+	if len(ids) == 0 {
+		return ""
+	}
+	envVar := "ROCR_VISIBLE_DEVICES="
+	if runtime.GOOS != "linux" {
+		envVar = "HIP_VISIBLE_DEVICES="
+	}
+	// There are 3 potential env vars to use to select GPUs.
+	// ROCR_VISIBLE_DEVICES supports UUID or numeric but does not work on Windows
+	// HIP_VISIBLE_DEVICES supports numeric IDs only
+	// GPU_DEVICE_ORDINAL supports numeric IDs only
+	return envVar + strings.Join(ids, ",")
+}
+
+// GetSystemInfo returns the last cached state of the GPUs on the system
+func GetSystemInfo() SystemInfo {
+	deviceMu.Lock()
+	defer deviceMu.Unlock()
+	gpus := devInfoToInfoList(devices)
 	if len(gpus) == 1 && gpus[0].Library == "cpu" {
 		gpus = []GpuInfo{}
 	}
 
 	return SystemInfo{
-		System:          cpus[0],
-		GPUs:            gpus,
-		UnsupportedGPUs: unsupportedGPUs,
-		DiscoveryErrors: discoveryErrors,
+		System: CPUInfo{
+			CPUs:    GetCPUDetails(),
+			GpuInfo: GetCPUInfo(),
+		},
+		GPUs: gpus,
 	}
+}
+
+func cudaJetpack() string {
+	if runtime.GOARCH == "arm64" && runtime.GOOS == "linux" {
+		if CudaTegra != "" {
+			ver := strings.Split(CudaTegra, ".")
+			if len(ver) > 0 {
+				return "jetpack" + ver[0]
+			}
+		} else if data, err := os.ReadFile("/etc/nv_tegra_release"); err == nil {
+			r := regexp.MustCompile(` R(\d+) `)
+			m := r.FindSubmatch(data)
+			if len(m) != 2 {
+				slog.Info("Unexpected format for /etc/nv_tegra_release.  Set JETSON_JETPACK to select version")
+			} else {
+				if l4t, err := strconv.Atoi(string(m[1])); err == nil {
+					// Note: mapping from L4t -> JP is inconsistent (can't just subtract 30)
+					// https://developer.nvidia.com/embedded/jetpack-archive
+					switch l4t {
+					case 35:
+						return "jetpack5"
+					case 36:
+						return "jetpack6"
+					default:
+						// Newer Jetson systems use the SBSU runtime
+						slog.Debug("unrecognized L4T version", "nv_tegra_release", string(data))
+					}
+				}
+			}
+		}
+	}
+	return ""
 }
