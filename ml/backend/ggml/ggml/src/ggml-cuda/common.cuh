@@ -1019,6 +1019,7 @@ struct ggml_backend_cuda_context {
     explicit ggml_backend_cuda_context(int device) :
         device(device),
         name(GGML_CUDA_NAME + std::to_string(device)) {
+        // constructor implementation
     }
 
     ~ggml_backend_cuda_context();

@@ -43,4 +43,8 @@ template<typename dst_t, typename src_t>
     } else {
         return float(x);
     }
+
+    // Add a final, logically unreachable return statement to satisfy the compiler
+    // The previous `else` block already covers all other paths.
+    return dst_t();
 }

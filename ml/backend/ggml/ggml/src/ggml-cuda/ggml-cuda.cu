@@ -494,7 +494,7 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
 // pool with virtual memory
 #if defined(GGML_USE_VMM)
 struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
-    static const size_t CUDA_POOL_VMM_MAX_SIZE = 1ull << 35; // 32 GB default
+    static const size_t CUDA_POOL_VMM_MAX_SIZE = 1ull << 35; // 32 GB
 
     int device;
     CUdeviceptr pool_addr = 0;
@@ -512,7 +512,7 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
         device(device),
         granularity(ggml_cuda_info().devices[device].vmm_granularity),
         allocate(alloc) {
-        if (allocate) {
+        if (!allocate) {
             // Get actual GPU memory and set a reasonable max pool size
             size_t free_mem, total_mem;
             ggml_cuda_set_device(device);
@@ -542,7 +542,7 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
         }
     }
 
-    void * alloc(size_t size, size_t * actual_size) override {
+void * alloc(size_t size, size_t * actual_size) override {
         // round up the allocation size to the alignment to ensure that all allocations are aligned for all data types
         const size_t alignment = 128;
         size = alignment * ((size + alignment - 1) / alignment);
@@ -583,12 +583,9 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
                     throw std::bad_alloc();
                 }
 
-            // reserve virtual address space (if not already reserved)
-            if (pool_addr == 0) {
-                CU_CHECK(cuMemAddressReserve(&pool_addr, max_pool_size, 0, 0, 0));
                 // reserve virtual address space (if not already reserved)
                 if (pool_addr == 0) {
-                    CU_CHECK(cuMemAddressReserve(&pool_addr, CUDA_POOL_VMM_MAX_SIZE, 0, 0, 0));
+                    CU_CHECK(cuMemAddressReserve(&pool_addr, max_pool_size, 0, 0, 0));
                 }
 
                 // map at the end of the pool
@@ -614,7 +611,7 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
                 }
 
 #if defined(GGML_USE_HIP)
-            mappings.push_back({start_ptr, reserve_size});
+                mappings.push_back({start_ptr, reserve_size});
 #endif
             }
 
@@ -4324,4 +4321,4 @@ ggml_backend_t ggml_backend_cuda_init(int device) {
     return cuda_backend;
 }
 
-GGML_BACKEND_DL_IMPL(ggml_backend_cuda_reg)
+GGML_BACKEND_DL_IMPL(ggml_backend_cuda_reg);
