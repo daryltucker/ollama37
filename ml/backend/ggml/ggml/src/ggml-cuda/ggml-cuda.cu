@@ -494,7 +494,7 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
 // pool with virtual memory
 #if defined(GGML_USE_VMM)
 struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
-    static const size_t CUDA_POOL_VMM_MAX_SIZE = 1ull << 35; // 32 GB default
+    static const size_t CUDA_POOL_VMM_MAX_SIZE = 1ull << 35; // 32 GB
 
     int device;
     CUdeviceptr pool_addr = 0;
@@ -511,24 +511,24 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
     explicit ggml_cuda_pool_vmm(int device, bool alloc) :
         device(device),
         granularity(ggml_cuda_info().devices[device].vmm_granularity),
-        allocate(alloc)                     // keep upstream flag
-    {
-        // If allocation is disabled, set a sentinel address and skip size calculations
+        allocate(alloc) {
+        // >> Tesla K80
+        {
+            // Get actual GPU memory and set a reasonable max pool size
+            size_t free_mem, total_mem;
+            ggml_cuda_set_device(device);
+            CUDA_CHECK(cudaMemGetInfo(&free_mem, &total_mem));
+
+            // Use 90% of total GPU memory as max, or default 32GB, whichever is smaller
+            max_pool_size = std::min(CUDA_POOL_VMM_MAX_SIZE, (size_t)(total_mem * 0.9));
+
+            // CRITICAL: Align max_pool_size to granularity to avoid CUDA_ERROR_INVALID_VALUE
+            max_pool_size = ((max_pool_size + granularity - 1) / granularity) * granularity;
+        }
+        // << Tesla K80
         if (!allocate) {
             pool_addr = (CUdeviceptr)CUDA_ALIGNMENT;
-            return;
         }
-
-        // Get actual GPU memory and set a reasonable max pool size
-        size_t free_mem, total_mem;
-        ggml_cuda_set_device(device);
-        CUDA_CHECK(cudaMemGetInfo(&free_mem, &total_mem));
-
-        // Use 90 % of total GPU memory as max, or the hard‑coded limit, whichever is smaller
-        max_pool_size = std::min(CUDA_POOL_VMM_MAX_SIZE, static_cast<size_t>(total_mem * 0.9));
-
-        // Align max_pool_size to granularity to avoid CUDA_ERROR_INVALID_VALUE
-        max_pool_size = ((max_pool_size + granularity - 1) / granularity) * granularity;
     }
 
     ~ggml_cuda_pool_vmm() {
@@ -557,8 +557,7 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
             size_t reserve_size = size - avail;
             reserve_size = granularity * ((reserve_size + granularity - 1) / granularity);
 
-            GGML_ASSERT(pool_size + reserve_size <= max_pool_size);
-
+            // >> Tesla K80
             // Check if we have enough free memory before attempting allocation
             size_t free_mem, total_mem;
             ggml_cuda_set_device(device);
@@ -573,6 +572,9 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
                     return nullptr;
                 }
             }
+            // << Tesla K80
+
+            GGML_ASSERT(pool_size + reserve_size <= max_pool_size);
 
             if (allocate) {
                 // allocate more physical memory
@@ -586,12 +588,9 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
                     throw std::bad_alloc();
                 }
 
-            // reserve virtual address space (if not already reserved)
-            if (pool_addr == 0) {
-                CU_CHECK(cuMemAddressReserve(&pool_addr, max_pool_size, 0, 0, 0));
                 // reserve virtual address space (if not already reserved)
                 if (pool_addr == 0) {
-                    CU_CHECK(cuMemAddressReserve(&pool_addr, CUDA_POOL_VMM_MAX_SIZE, 0, 0, 0));
+                    CU_CHECK(cuMemAddressReserve(&pool_addr, max_pool_size, 0, 0, 0));
                 }
 
                 // map at the end of the pool
@@ -1142,6 +1141,7 @@ static void ggml_backend_cuda_split_buffer_set_tensor(ggml_backend_buffer_t buff
 
         const char * buf_host = (const char *)data + offset_split;
         CUDA_CHECK(cudaMemcpyAsync(extra->data_device[id], buf_host, original_size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+
     }
 
     for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
@@ -1464,9 +1464,11 @@ static void ggml_cuda_op_mul_mat_cublas(
     const int cc = ggml_cuda_info().devices[id].cc;
 
     // >> Tesla K80
+    // BF16 requires compute capability 8.0 (Ampere) or higher for CUDA_R_16BF support
+    // For older GPUs like Tesla K80 (cc 3.7), we need to fallback to FP16 or FP32
     // We remove GGML_CUDA_CC_IS_NVIDIA(cc) so that all NVIDIA devices do not blindly get added to bf16
     // We add (GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_AMPERE) as a correct way to flag bf16
-    supports_bf16 = GGML_CUDA_CC_IS_AMD(cc) ||
+    const bool supports_bf16 = GGML_CUDA_CC_IS_AMD(cc) ||
         (GGML_CUDA_CC_IS_MTHREADS(cc) && cc >= GGML_CUDA_CC_QY2) ||
         (GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_AMPERE);
     // << Tesla K80
@@ -4329,4 +4331,4 @@ ggml_backend_t ggml_backend_cuda_init(int device) {
     return cuda_backend;
 }
 
-GGML_BACKEND_DL_IMPL(ggml_backend_cuda_reg)
+GGML_BACKEND_DL_IMPL(ggml_backend_cuda_reg);
