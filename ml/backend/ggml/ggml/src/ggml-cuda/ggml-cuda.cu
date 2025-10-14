@@ -503,6 +503,7 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
     bool allocate = true;
     size_t last_alloc = 0;
     size_t granularity;
+    size_t max_pool_size;
 #if defined(GGML_USE_HIP)
     std::vector<std::pair<CUdeviceptr, size_t>> mappings;
 #endif
@@ -511,6 +512,20 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
         device(device),
         granularity(ggml_cuda_info().devices[device].vmm_granularity),
         allocate(alloc) {
+        // >> Tesla K80
+        {
+            // Get actual GPU memory and set a reasonable max pool size
+            size_t free_mem, total_mem;
+            ggml_cuda_set_device(device);
+            CUDA_CHECK(cudaMemGetInfo(&free_mem, &total_mem));
+
+            // Use 90% of total GPU memory as max, or default 32GB, whichever is smaller
+            max_pool_size = std::min(CUDA_POOL_VMM_MAX_SIZE, (size_t)(total_mem * 0.9));
+
+            // CRITICAL: Align max_pool_size to granularity to avoid CUDA_ERROR_INVALID_VALUE
+            max_pool_size = ((max_pool_size + granularity - 1) / granularity) * granularity;
+        }
+        // << Tesla K80
         if (!allocate) {
             pool_addr = (CUdeviceptr)CUDA_ALIGNMENT;
         }
@@ -526,7 +541,7 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
 #else
             CU_CHECK(cuMemUnmap(pool_addr, pool_size));
 #endif
-            CU_CHECK(cuMemAddressFree(pool_addr, CUDA_POOL_VMM_MAX_SIZE));
+            CU_CHECK(cuMemAddressFree(pool_addr, max_pool_size));
         }
     }
 
@@ -542,7 +557,24 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
             size_t reserve_size = size - avail;
             reserve_size = granularity * ((reserve_size + granularity - 1) / granularity);
 
-            GGML_ASSERT(pool_size + reserve_size <= CUDA_POOL_VMM_MAX_SIZE);
+            // >> Tesla K80
+            // Check if we have enough free memory before attempting allocation
+            size_t free_mem, total_mem;
+            ggml_cuda_set_device(device);
+            CUDA_CHECK(cudaMemGetInfo(&free_mem, &total_mem));
+
+            if (reserve_size > free_mem) {
+                // Not enough free memory, reduce reserve_size to what's available
+                reserve_size = (free_mem / granularity) * granularity; // round down to granularity
+                if (reserve_size == 0) {
+                    GGML_LOG_WARN("%s: Not enough free GPU memory on device %d (requested: %zu, available: %zu)\n",
+                                  __func__, device, size, free_mem);
+                    return nullptr;
+                }
+            }
+            // << Tesla K80
+
+            GGML_ASSERT(pool_size + reserve_size <= max_pool_size);
 
             if (allocate) {
                 // allocate more physical memory
@@ -558,7 +590,7 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
 
                 // reserve virtual address space (if not already reserved)
                 if (pool_addr == 0) {
-                    CU_CHECK(cuMemAddressReserve(&pool_addr, CUDA_POOL_VMM_MAX_SIZE, 0, 0, 0));
+                    CU_CHECK(cuMemAddressReserve(&pool_addr, max_pool_size, 0, 0, 0));
                 }
 
                 // map at the end of the pool
@@ -722,41 +754,106 @@ static enum ggml_status ggml_backend_cuda_buffer_init_tensor(ggml_backend_buffer
 static void ggml_backend_cuda_buffer_memset_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
-    ggml_cuda_set_device(ctx->device);
-    CUDA_CHECK(cudaMemsetAsync((char *)tensor->data + offset, value, size, cudaStreamPerThread));
-    CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+    // Device context must be set correctly - critical for model functionality
+    CUDA_CHECK(cudaSetDevice(ctx->device));
+
+    cudaError_t memset_result = cudaMemsetAsync((char *)tensor->data + offset, value, size, cudaStreamPerThread);
+    if (memset_result != cudaSuccess) {
+        GGML_LOG_ERROR("cudaMemsetAsync failed on device %d: %s\n",
+                       ctx->device, cudaGetErrorString(memset_result));
+        cudaGetLastError(); // Clear error state
+        return;
+    }
+
+    cudaError_t sync_result = cudaStreamSynchronize(cudaStreamPerThread);
+    if (sync_result != cudaSuccess) {
+        GGML_LOG_ERROR("Stream synchronization failed on device %d in buffer_memset_tensor: %s\n",
+                       ctx->device, cudaGetErrorString(sync_result));
+        cudaGetLastError(); // Clear error state
+        return;
+    }
 }
 
 static void ggml_backend_cuda_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
-    ggml_cuda_set_device(ctx->device);
-    CUDA_CHECK(cudaMemcpyAsync((char *)tensor->data + offset, data, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
-    CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+    // Device context must be set correctly - critical for model functionality
+    CUDA_CHECK(cudaSetDevice(ctx->device));
+
+    cudaError_t copy_result = cudaMemcpyAsync((char *)tensor->data + offset, data, size, cudaMemcpyHostToDevice, cudaStreamPerThread);
+    if (copy_result != cudaSuccess) {
+        GGML_LOG_ERROR("cudaMemcpyAsync failed on device %d: %s\n",
+                       ctx->device, cudaGetErrorString(copy_result));
+        cudaGetLastError(); // Clear error state
+        return;
+    }
+
+    cudaError_t sync_result = cudaStreamSynchronize(cudaStreamPerThread);
+    if (sync_result != cudaSuccess) {
+        GGML_LOG_ERROR("Stream synchronization failed on device %d in buffer_set_tensor: %s\n",
+                       ctx->device, cudaGetErrorString(sync_result));
+        cudaGetLastError(); // Clear error state
+        return;
+    }
 }
 
 static void ggml_backend_cuda_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
-    ggml_cuda_set_device(ctx->device);
-    CUDA_CHECK(cudaMemcpyAsync(data, (const char *)tensor->data + offset, size, cudaMemcpyDeviceToHost, cudaStreamPerThread));
-    CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+    // Device context must be set correctly - critical for model functionality
+    CUDA_CHECK(cudaSetDevice(ctx->device));
+
+    cudaError_t copy_result = cudaMemcpyAsync(data, (const char *)tensor->data + offset, size, cudaMemcpyDeviceToHost, cudaStreamPerThread);
+    if (copy_result != cudaSuccess) {
+        GGML_LOG_ERROR("cudaMemcpyAsync failed on device %d: %s\n",
+                       ctx->device, cudaGetErrorString(copy_result));
+        cudaGetLastError(); // Clear error state
+        return;
+    }
+
+    cudaError_t sync_result = cudaStreamSynchronize(cudaStreamPerThread);
+    if (sync_result != cudaSuccess) {
+        GGML_LOG_ERROR("Stream synchronization failed on device %d in buffer_get_tensor: %s\n",
+                       ctx->device, cudaGetErrorString(sync_result));
+        cudaGetLastError(); // Clear error state
+        return;
+    }
 }
 
 static bool ggml_backend_cuda_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
     if (ggml_backend_buffer_is_cuda(src->buffer)) {
         ggml_backend_cuda_buffer_context * src_ctx = (ggml_backend_cuda_buffer_context *)src->buffer->context;
         ggml_backend_cuda_buffer_context * dst_ctx = (ggml_backend_cuda_buffer_context *)dst->buffer->context;
+
+        // Device context must be set correctly - critical for model functionality
+        CUDA_CHECK(cudaSetDevice(dst_ctx->device));
+
+        cudaError_t copy_result;
         if (src_ctx->device == dst_ctx->device) {
-            CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(src), cudaMemcpyDeviceToDevice, cudaStreamPerThread));
+            copy_result = cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(src), cudaMemcpyDeviceToDevice, cudaStreamPerThread);
         } else {
 #ifdef GGML_CUDA_NO_PEER_COPY
             return false;
 #else
-            CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, dst_ctx->device, src->data, src_ctx->device, ggml_nbytes(src), cudaStreamPerThread));
+            copy_result = cudaMemcpyPeerAsync(dst->data, dst_ctx->device, src->data, src_ctx->device, ggml_nbytes(src), cudaStreamPerThread);
 #endif
         }
-        CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+
+        if (copy_result != cudaSuccess) {
+            GGML_LOG_ERROR("cudaMemcpy%sAsync failed (src device %d -> dst device %d): %s\n",
+                           (src_ctx->device == dst_ctx->device) ? "" : "Peer",
+                           src_ctx->device, dst_ctx->device, cudaGetErrorString(copy_result));
+            cudaGetLastError(); // Clear error state
+            return false;
+        }
+
+        cudaError_t sync_result = cudaStreamSynchronize(cudaStreamPerThread);
+        if (sync_result != cudaSuccess) {
+            GGML_LOG_ERROR("Stream synchronization failed on device %d in buffer_cpy_tensor: %s\n",
+                           dst_ctx->device, cudaGetErrorString(sync_result));
+            cudaGetLastError(); // Clear error state
+            return false;
+        }
         return true;
     }
     return false;
@@ -1044,6 +1141,7 @@ static void ggml_backend_cuda_split_buffer_set_tensor(ggml_backend_buffer_t buff
 
         const char * buf_host = (const char *)data + offset_split;
         CUDA_CHECK(cudaMemcpyAsync(extra->data_device[id], buf_host, original_size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+
     }
 
     for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
@@ -1365,8 +1463,15 @@ static void ggml_cuda_op_mul_mat_cublas(
 
     const int cc = ggml_cuda_info().devices[id].cc;
 
-    const bool supports_bf16 = GGML_CUDA_CC_IS_NVIDIA(cc) || GGML_CUDA_CC_IS_AMD(cc) ||
-        (GGML_CUDA_CC_IS_MTHREADS(cc) && cc >= GGML_CUDA_CC_QY2);
+    // >> Tesla K80
+    // BF16 requires compute capability 8.0 (Ampere) or higher for CUDA_R_16BF support
+    // For older GPUs like Tesla K80 (cc 3.7), we need to fallback to FP16 or FP32
+    // We remove GGML_CUDA_CC_IS_NVIDIA(cc) so that all NVIDIA devices do not blindly get added to bf16
+    // We add (GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_AMPERE) as a correct way to flag bf16
+    const bool supports_bf16 = GGML_CUDA_CC_IS_AMD(cc) ||
+        (GGML_CUDA_CC_IS_MTHREADS(cc) && cc >= GGML_CUDA_CC_QY2) ||
+        (GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_AMPERE);
+    // << Tesla K80
 
     const bool use_fp16 = (src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type)) && ggml_is_contiguous(src0) && row_diff == src0->ne[1] && dst->op_params[0] == GGML_PREC_DEFAULT;
 
@@ -2756,6 +2861,18 @@ static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_src, ggml_
 static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
 
+    // Device context must be set correctly - critical for model functionality
+    CUDA_CHECK(cudaSetDevice(cuda_ctx->device));
+
+    // Check if stream is still valid before synchronization
+    cudaError_t query_result = cudaStreamQuery(cuda_ctx->stream());
+    if (query_result != cudaSuccess && query_result != cudaErrorNotReady) {
+        GGML_LOG_ERROR("Stream validation failed on device %d: %s\n",
+                       cuda_ctx->device, cudaGetErrorString(query_result));
+        return;
+    }
+
+    // Use CUDA_CHECK for inference operations - we want to crash on errors, not silently fail
     CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));
 
     GGML_UNUSED(backend);
@@ -4214,4 +4331,4 @@ ggml_backend_t ggml_backend_cuda_init(int device) {
     return cuda_backend;
 }
 
-GGML_BACKEND_DL_IMPL(ggml_backend_cuda_reg)
+GGML_BACKEND_DL_IMPL(ggml_backend_cuda_reg);

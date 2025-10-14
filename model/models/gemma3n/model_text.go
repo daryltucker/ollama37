@@ -202,9 +202,10 @@ func (a AltUp) Predict(ctx ml.Context, hiddenStates ml.Tensor, opts *TextOptions
 	coefficients := a.PredictionCoefficient.Forward(ctx, modalities)
 	coefficients = coefficients.Reshape(ctx, opts.altupInputs, opts.altupInputs, coefficients.Dim(1), coefficients.Dim(2))
 
-	predictions := coefficients.Mulmat(ctx, hiddenStates.Permute(ctx, 1, 2, 0, 3).Contiguous(ctx))
-	predictions = predictions.Permute(ctx, 2, 0, 1, 3).Contiguous(ctx)
-	return predictions.Add(ctx, hiddenStates)
+	hiddenStates = hiddenStates.Permute(ctx, 1, 2, 0, 3).Contiguous(ctx)
+	predictions := coefficients.Mulmat(ctx, hiddenStates)
+	predictions = predictions.Add(ctx, hiddenStates)
+	return predictions.Permute(ctx, 2, 0, 1, 3).Contiguous(ctx)
 }
 
 func (a AltUp) Correct(ctx ml.Context, predictions, activated, one ml.Tensor, opts *TextOptions) ml.Tensor {

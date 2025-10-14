@@ -43,4 +43,9 @@ template<typename dst_t, typename src_t>
     } else {
         return float(x);
     }
+
+    // >> Tesla K80
+    // We add return here to force all compile-time paths for old nvcc
+    return dst_t();
+    // << Tesla K80
 }

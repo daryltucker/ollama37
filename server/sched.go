@@ -219,34 +219,39 @@ func (s *Scheduler) processPending(ctx context.Context) {
 
 					// More than one loaded model, so we have to see if the
 					// new one fits
-
 					needEvict := s.loadFn(pending, ggml, gpus, true)
 					if !needEvict {
 						slog.Debug("new model fits with existing models, loading")
 						break
 					}
-
-					runnerToExpire = s.findRunnerToUnload()
 				}
 
+				// No suitable runner found, pick one to unload
+				runnerToExpire = s.findRunnerToUnload()
 				if runnerToExpire == nil {
 					// While we were performing load calculations, the loaded runner(s) unloaded in parallel
-					// so findRunnerToUnload returned no runners.  We'll try again and the loadedCount should be zero
+					// so findRunnerToUnload returned no runners. We'll try again and the loadedCount should be zero
 					slog.Debug("runner to expire was nil, retrying")
 					continue
 				}
-				// Trigger an expiration to unload once it's done
+
+				slog.Warn("exited model selection, checking runnerToExpire", "runnerToExpire", runnerToExpire != nil)
+				slog.Warn("attempting to unload runner", "runner", runnerToExpire.modelPath)
 				runnerToExpire.refMu.Lock()
-				slog.Debug("resetting model to expire immediately to make room", "runner", runnerToExpire, "refCount", runnerToExpire.refCount)
+				slog.Warn("resetting model to expire immediately to make room", "runner", runnerToExpire.modelPath, "refCount", runnerToExpire.refCount)
 				if runnerToExpire.expireTimer != nil {
 					runnerToExpire.expireTimer.Stop()
 					runnerToExpire.expireTimer = nil
 				}
 				runnerToExpire.sessionDuration = 0
 				if runnerToExpire.refCount <= 0 {
+					slog.Warn("sending idle runner to expired channel", "runner", runnerToExpire.modelPath)
 					s.expiredCh <- runnerToExpire
+				} else {
+					slog.Warn("runner still has references, waiting for refCount to reach 0", "runner", runnerToExpire.modelPath, "refCount", runnerToExpire.refCount)
 				}
 				runnerToExpire.refMu.Unlock()
+
 				// Wait for the unload to happen
 				slog.Debug("waiting for pending requests to complete and unload to occur", "runner", runnerToExpire)
 				select {
@@ -254,7 +259,7 @@ func (s *Scheduler) processPending(ctx context.Context) {
 					slog.Debug("shutting down scheduler pending loop")
 					return
 				case <-s.unloadedCh:
-					slog.Debug("unload completed", "runner", runnerToExpire)
+					slog.Warn("unload completed, retrying model load", "runner", runnerToExpire)
 					continue
 				}
 			}
@@ -755,6 +760,34 @@ func (a ByDurationAndName) Less(i, j int) bool {
 // func (a BySize) Len() int           { return len(a) }
 // func (a BySize) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 // func (a BySize) Less(i, j int) bool { return a[i].vramSize < a[j].vramSize }
+
+// findConflictingRunnerToUnload finds a specific runner that conflicts with target GPUs
+func (s *Scheduler) findConflictingRunnerToUnload(targetGpus discover.GpuInfoList) *runnerRef {
+	s.loadedMu.Lock()
+	defer s.loadedMu.Unlock()
+
+	// Find the first loaded model that uses any of our target GPUs
+	for _, loadedRunner := range s.loaded {
+		if loadedRunner.loading {
+			continue // Skip models that are still loading
+		}
+
+		// Check if this loaded model is using any of our target GPUs
+		for _, targetGpu := range targetGpus {
+			for _, loadedGpu := range loadedRunner.gpus {
+				if targetGpu.ID == loadedGpu.ID {
+					slog.Debug("found conflicting runner using GPU",
+						"runner", loadedRunner.modelPath,
+						"gpu", targetGpu.ID)
+					return loadedRunner
+				}
+			}
+		}
+	}
+
+	slog.Debug("no conflicting runner found for target GPUs")
+	return nil
+}
 
 // findRunnerToUnload finds a runner to unload to make room for a new model
 func (s *Scheduler) findRunnerToUnload() *runnerRef {
