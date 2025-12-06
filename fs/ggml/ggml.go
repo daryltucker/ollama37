@@ -321,9 +321,14 @@ func (ts Tensors) GroupLayers() map[string]Layer {
 
 type Layer map[string]*Tensor
 
+// Size returns the total size of tensors in this layer that should be loaded to GPU.
+// Tensors marked with CPUOnly=true (by per_layer_dynamic offloader) are excluded from
+// the size calculation, as they remain in CPU memory instead of GPU VRAM.
 func (l Layer) Size() (size uint64) {
 	for _, t := range l {
-		size += t.Size()
+		if !t.CPUOnly {
+			size += t.Size()
+		}
 	}
 
 	return size
@@ -336,6 +341,10 @@ type Tensor struct {
 
 	// Shape is the number of elements in each dimension
 	Shape []uint64 `json:"shape"`
+
+	// CPUOnly indicates this tensor should not be loaded to GPU.
+	// Set by per_layer_dynamic offloader based on quantization type.
+	CPUOnly bool `json:"-"`
 
 	io.WriterTo `json:"-"`
 }

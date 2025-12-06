@@ -207,6 +207,9 @@ func (s *Scheduler) processPending(ctx context.Context) {
 						break
 					}
 
+					// per_layer_dynamic: Mark tensors for CPU offload based on quantization type
+					ggml.MarkTensorsForCPUOffload()
+
 					// Update free memory from currently loaded models
 					s.updateFreeSpace(gpus)
 
