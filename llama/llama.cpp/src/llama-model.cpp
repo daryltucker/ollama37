@@ -2559,10 +2559,13 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             if (flags & TENSOR_DUPLICATED) {
                 ggml_tensor * t = ggml_get_tensor(ctx, tn.str().c_str());
                 if (t) {
+                    tensors_by_name.emplace_back(tn.str(), t);
                     return t;
                 }
             }
-            return ml.create_tensor(ctx, tn, ne, flags);
+            ggml_tensor * t = ml.create_tensor(ctx, tn, ne, flags);
+            tensors_by_name.emplace_back(tn.str(), t);
+            return t;
         };
 
         layers.resize(n_layer);

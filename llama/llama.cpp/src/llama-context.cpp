@@ -12,6 +12,9 @@
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <algorithm>
+#include <sstream>
+#include <cctype>
 
 //
 // llama_context
@@ -284,6 +287,38 @@ llama_context::llama_context(
         }
 
         sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, pipeline_parallel, cparams.op_offload));
+
+        // OLLAMA_CPU_OFFLOAD_TYPES
+        {
+            const char* env_types = getenv("OLLAMA_CPU_OFFLOAD_TYPES");
+            if (env_types) {
+                std::vector<std::string> offload_types;
+                std::string types_str(env_types);
+                for (auto& c : types_str) c = std::tolower(c);
+                std::stringstream ss(types_str);
+                std::string type_str;
+                while (std::getline(ss, type_str, ',')) {
+                    size_t first = type_str.find_first_not_of(" \t\n\r");
+                    if (first == std::string::npos) continue;
+                    size_t last = type_str.find_last_not_of(" \t\n\r");
+                    offload_types.push_back(type_str.substr(first, last - first + 1));
+                }
+
+                if (!offload_types.empty()) {
+                    LLAMA_LOG_INFO("%s: OLLAMA_CPU_OFFLOAD_TYPES active\n", __func__);
+                    for (const auto& kv : model.tensors_by_name) {
+                        struct ggml_tensor* t = kv.second;
+                        const char* type_name = ggml_type_name(t->type);
+                        for (const auto& target : offload_types) {
+                            if (target == type_name) {
+                                ggml_backend_sched_set_tensor_backend(sched.get(), t, backend_cpu);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         if (pipeline_parallel) {
             LLAMA_LOG_INFO("%s: pipeline parallelism enabled (n_copies=%d)\n", __func__, ggml_backend_sched_get_n_copies(sched.get()));
