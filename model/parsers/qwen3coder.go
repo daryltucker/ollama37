@@ -43,7 +43,7 @@ func (p *Qwen3CoderParser) HasThinkingSupport() bool {
 	return false
 }
 
-func (p *Qwen3CoderParser) Init(tools []api.Tool, lastMessage *api.Message) []api.Tool {
+func (p *Qwen3CoderParser) Init(tools []api.Tool, lastMessage *api.Message, thinkValue *api.ThinkValue) []api.Tool {
 	p.tools = tools
 	return tools // Qwen doesn't modify tools
 }
@@ -150,7 +150,9 @@ func eat(p *Qwen3CoderParser) ([]qwenEvent, bool) {
 			ambiguous := p.acc.String()[ambiguousStart:]
 			p.acc.Reset()
 			p.acc.WriteString(ambiguous)
-			events = append(events, qwenEventContent{content: unambiguous})
+			if len(unambiguous) > 0 {
+				events = append(events, qwenEventContent{content: unambiguous})
+			}
 			return events, false
 		} else {
 			// we found content that is entirely not a tool call. We should withhold
@@ -274,7 +276,14 @@ func parseToolCall(raw qwenEventRawToolCall, tools []api.Tool) (api.ToolCall, er
 		var paramType api.PropertyType
 		if matchedTool != nil && matchedTool.Function.Parameters.Properties != nil {
 			if prop, ok := matchedTool.Function.Parameters.Properties[parameter.Name]; ok {
-				paramType = prop.Type
+				// Handle anyOf by collecting all types from the union
+				if len(prop.AnyOf) > 0 {
+					for _, anyOfProp := range prop.AnyOf {
+						paramType = append(paramType, anyOfProp.Type...)
+					}
+				} else {
+					paramType = prop.Type
+				}
 			}
 		}
 
@@ -423,7 +432,7 @@ func transformToXML(raw string) string {
 		groups := qwenTagRegex.FindStringSubmatch(match)
 		tag := groups[1]
 		var escapedValue strings.Builder
-		xml.EscapeText(&escapedValue, []byte(groups[2]))
+		_ = xml.EscapeText(&escapedValue, []byte(groups[2])) // error is always nil for strings.Builder
 		return fmt.Sprintf(`<%s name="%s">`, tag, escapedValue.String())
 	})
 
