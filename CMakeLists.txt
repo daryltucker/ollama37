@@ -27,6 +27,13 @@ set(GGML_CUDA_GRAPHS ON)
 set(GGML_CUDA_FA ON)
 set(GGML_CUDA_COMPRESSION_MODE default)
 
+# >> Tesla K80
+# GGML_CUDA_FAST_BUILD: Skip slow flash attention template instances for faster iteration.
+# Usage: cmake -DGGML_CUDA_FAST_BUILD=ON .. (for faster dev builds)
+#        cmake -DGGML_CUDA_FAST_BUILD=OFF .. (for final/release builds, default)
+option(GGML_CUDA_FAST_BUILD "Skip fattn-tile and fattn-mma template instances for faster builds" OFF)
+# << Tesla K80
+
 if((CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
     OR (NOT CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "arm|aarch64|ARM64|ARMv[0-9]+"))
     set(GGML_CPU_ALL_VARIANTS ON)

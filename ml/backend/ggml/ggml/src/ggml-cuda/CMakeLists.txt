@@ -44,14 +44,24 @@ if (CUDAToolkit_FOUND)
     list(APPEND GGML_HEADERS_CUDA "../../include/ggml-cuda.h")
 
     file(GLOB   GGML_SOURCES_CUDA "*.cu")
+
+# >> Tesla K80
+# GGML_CUDA_FAST_BUILD: Skip slow flash attention template instances for faster iteration.
+# Set to ON for development builds, OFF for final/release builds.
+if (NOT GGML_CUDA_FAST_BUILD)
     file(GLOB   SRCS "template-instances/fattn-tile*.cu")
     list(APPEND GGML_SOURCES_CUDA ${SRCS})
     file(GLOB   SRCS "template-instances/fattn-mma*.cu")
     list(APPEND GGML_SOURCES_CUDA ${SRCS})
-    file(GLOB   SRCS "template-instances/mmq*.cu")
-    list(APPEND GGML_SOURCES_CUDA ${SRCS})
-    file(GLOB   SRCS "template-instances/mmf*.cu")
-    list(APPEND GGML_SOURCES_CUDA ${SRCS})
+else()
+    message(STATUS "GGML_CUDA_FAST_BUILD: Skipping fattn-tile and fattn-mma template instances")
+endif()
+# << Tesla K80
+
+file(GLOB   SRCS "template-instances/mmq*.cu")
+list(APPEND GGML_SOURCES_CUDA ${SRCS})
+file(GLOB   SRCS "template-instances/mmf*.cu")
+list(APPEND GGML_SOURCES_CUDA ${SRCS})
 
     if (GGML_CUDA_FA_ALL_QUANTS)
         file(GLOB   SRCS "template-instances/fattn-vec*.cu")

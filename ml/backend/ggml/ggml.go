@@ -220,14 +220,60 @@ func New(modelPath string, params ml.BackendParams) (ml.Backend, error) {
 		return cpuDeviceBufferType
 	}
 
-	// repeating layers are assigned based on their index in reverse order, e.g. i / (block_count + 1)
-	layers := make([]deviceBufferType, blocks)
-	for i := range layers {
-		layers[i] = assignLayer(i)
+	contains := func(s string, parts ...string) bool {
+		split := strings.Split(s, ".")
+		for _, part := range parts {
+			if slices.Contains(split, part) {
+				return true
+			}
+		}
+
+		return false
 	}
 
-	// outputs are assigned iff allowed by splits and configured number of gpu layers
-	output := assignLayer(blocks)
+	// repeating layers are assigned based on their index in reverse order, e.g. i / (block_count + 1)
+	layers := make([]deviceBufferType, blocks)
+
+	// >> Tesla K80
+	// Check which layers contain CPU-only tensors and force them to CPU.
+	// This prevents performance degradation from mixed-residency layers (GPU computing with CPU inputs).
+	forcedCPULayers := make(map[int]bool)
+	for _, t := range meta.Tensors().Items() {
+		if !t.CPUOnly {
+			continue
+		}
+
+		// Check for output/head tensors first
+		if contains(t.Name, "cls", "output", "output_norm",
+			"altup_proj", "altup_unembd_proj",
+			"per_layer_token_embd", "per_layer_model_proj", "per_layer_proj_norm") {
+			forcedCPULayers[blocks] = true
+			continue
+		}
+
+		// Check for numbered blocks
+		if fields := strings.FieldsFunc(t.Name, func(r rune) bool { return !unicode.IsNumber(r) }); len(fields) > 0 {
+			if i, err := strconv.Atoi(fields[0]); err == nil {
+				forcedCPULayers[i] = true
+			}
+		}
+	}
+	// << Tesla K80
+
+	for i := range layers {
+		if forcedCPULayers[i] {
+			layers[i] = cpuDeviceBufferType
+		} else {
+			layers[i] = assignLayer(i)
+		}
+	}
+
+	var output deviceBufferType
+	if forcedCPULayers[blocks] {
+		output = cpuDeviceBufferType
+	} else {
+		output = assignLayer(blocks)
+	}
 
 	maxTensors := len(meta.Tensors().Items())
 	maxTensors += 1
@@ -296,17 +342,6 @@ func New(modelPath string, params ml.BackendParams) (ml.Backend, error) {
 		return nil
 	}
 
-	contains := func(s string, parts ...string) bool {
-		split := strings.Split(s, ".")
-		for _, part := range parts {
-			if slices.Contains(split, part) {
-				return true
-			}
-		}
-
-		return false
-	}
-
 	for _, t := range meta.Tensors().Items() {
 		switch {
 		case contains(t.Name, "position_embd", "token_embd", "token_norm_embd", "token_types"):
@@ -338,11 +373,7 @@ func New(modelPath string, params ml.BackendParams) (ml.Backend, error) {
 			}
 
 			if layerIndex >= 0 {
-				if t.CPUOnly {
-					createTensor(tensor{source: t}, input.bts, layerIndex)
-				} else {
-					createTensor(tensor{source: t}, layers[layerIndex].bts, layerIndex)
-				}
+				createTensor(tensor{source: t}, layers[layerIndex].bts, layerIndex)
 			} else {
 				// load all other tensors on the cpu
 				createTensor(tensor{source: t}, input.bts, -1)
