@@ -290,7 +290,9 @@ llama_context::llama_context(
 
         // OLLAMA_CPU_OFFLOAD_TYPES
         {
-            const char* env_types = getenv("OLLAMA_CPU_OFFLOAD_TYPES");
+            // >> Tesla K80
+            const char* env_types = params.cpu_offload_types;
+            // << Tesla K80
             if (env_types) {
                 std::vector<std::string> offload_types;
                 std::string types_str(env_types);
@@ -2357,6 +2359,9 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
+        // >> Tesla K80
+        /*.cpu_offload_types           =*/ nullptr,
+        // << Tesla K80
     };
 
     return result;

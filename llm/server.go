@@ -222,12 +222,23 @@ func NewLlamaServer(systemInfo ml.SystemInfo, gpus []ml.DeviceInfo, modelPath st
 
 	gpuLibs := ml.LibraryPaths(gpus)
 	status := NewStatusWriter(os.Stderr)
+
+	extraEnvs := ml.GetVisibleDevicesEnv(gpus, false)
+	if extraEnvs == nil {
+		extraEnvs = make(map[string]string)
+	}
+	// >> Tesla K80
+	if t := envconfig.CpuOffloadTypes(); t != "" {
+		extraEnvs["OLLAMA_CPU_OFFLOAD_TYPES"] = t
+	}
+	// << Tesla K80
+
 	cmd, port, err := StartRunner(
 		textProcessor != nil,
 		modelPath,
 		gpuLibs,
 		status,
-		ml.GetVisibleDevicesEnv(gpus, false),
+		extraEnvs,
 	)
 
 	s := llmServer{

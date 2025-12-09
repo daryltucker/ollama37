@@ -2,8 +2,9 @@ package ggml
 
 import (
 	"log/slog"
-	"os"
 	"strings"
+
+	"github.com/ollama/ollama/envconfig"
 )
 
 // getOffloadTypes returns the list of tensor quantization types that should be
@@ -20,7 +21,9 @@ import (
 //   - Q8_0, Q8_1: INT8 quantization variants
 //   - Any other valid tensor type string (F16, BF16, Q2_K, etc.)
 func getOffloadTypes() map[string]bool {
-	envValue := os.Getenv("OLLAMA_CPU_OFFLOAD_TYPES")
+	// >> Tesla K80
+	envValue := envconfig.CpuOffloadTypes()
+	// << Tesla K80
 	if envValue == "" {
 		return nil
 	}

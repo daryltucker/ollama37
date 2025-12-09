@@ -39,6 +39,7 @@ import (
 	"sync"
 	"unsafe"
 
+	"github.com/ollama/ollama/envconfig"
 	_ "github.com/ollama/ollama/llama/llama.cpp/common"
 	_ "github.com/ollama/ollama/llama/llama.cpp/src"
 	_ "github.com/ollama/ollama/llama/llama.cpp/tools/mtmd"
@@ -116,6 +117,9 @@ func GetModelArch(modelPath string) (string, error) {
 
 type ContextParams struct {
 	c C.struct_llama_context_params
+	// >> Tesla K80
+	cpuOffloadTypes *C.char
+	// << Tesla K80
 }
 
 func NewContextParams(numCtx int, batchSize int, numSeqMax int, threads int, flashAttention bool, kvCacheType string) ContextParams {
@@ -134,7 +138,15 @@ func NewContextParams(numCtx int, batchSize int, numSeqMax int, threads int, fla
 	params.type_k = kvCacheTypeFromStr(strings.ToLower(kvCacheType))
 	params.type_v = kvCacheTypeFromStr(strings.ToLower(kvCacheType))
 
-	return ContextParams{c: params}
+	// >> Tesla K80
+	var cpuOffloadTypes *C.char
+	if envTypes := envconfig.CpuOffloadTypes(); envTypes != "" {
+		cpuOffloadTypes = C.CString(envTypes)
+		params.cpu_offload_types = cpuOffloadTypes
+	}
+	// << Tesla K80
+
+	return ContextParams{c: params, cpuOffloadTypes: cpuOffloadTypes}
 }
 
 // kvCacheTypeFromStr converts a string cache type to the corresponding GGML type value
@@ -317,6 +329,12 @@ func NewContextWithModel(model *Model, params ContextParams) (*Context, error) {
 		c:          C.llama_init_from_model(model.c, params.c),
 		numThreads: int(params.c.n_threads),
 	}
+	// >> Tesla K80
+	if params.cpuOffloadTypes != nil {
+		C.free(unsafe.Pointer(params.cpuOffloadTypes))
+	}
+	// << Tesla K80
+
 	if c.c == nil {
 		return nil, errors.New("unable to create llama context")
 	}
