@@ -338,6 +338,16 @@ func (l Layer) Size() (size uint64) {
 	return size
 }
 
+func (l Layer) SizeCPUOnly() (size uint64) {
+	for _, t := range l {
+		if t.CPUOnly {
+			size += t.Size()
+		}
+	}
+
+	return size
+}
+
 type Tensor struct {
 	Name   string `json:"name"`
 	Kind   uint32 `json:"kind"`

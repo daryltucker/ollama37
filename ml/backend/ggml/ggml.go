@@ -132,6 +132,8 @@ func New(modelPath string, params ml.BackendParams) (ml.Backend, error) {
 		return nil, err
 	}
 
+	meta.MarkTensorsForCPUOffload()
+
 	once.Do(func() {
 		slog.Info(
 			"",
@@ -243,7 +245,9 @@ func New(modelPath string, params ml.BackendParams) (ml.Backend, error) {
 	// contexts are shared by tensors of the same buffer type
 	ctxs := make(map[C.ggml_backend_buffer_type_t]*C.struct_ggml_context)
 	createTensor := func(t tensor, bts []C.ggml_backend_buffer_type_t, layer int) *C.struct_ggml_tensor {
-		for _, bt := range bts {
+		// TODO: iterate and check if buffer type supports this tensor
+		if len(bts) > 0 {
+			bt := bts[0]
 			if _, ok := ctxs[bt]; !ok {
 				ctxs[bt] = C.ggml_init(C.struct_ggml_init_params{
 					mem_size: C.ggml_tensor_overhead() * C.size_t(maxTensors),
@@ -334,7 +338,11 @@ func New(modelPath string, params ml.BackendParams) (ml.Backend, error) {
 			}
 
 			if layerIndex >= 0 {
-				createTensor(tensor{source: t}, layers[layerIndex].bts, layerIndex)
+				if t.CPUOnly {
+					createTensor(tensor{source: t}, input.bts, layerIndex)
+				} else {
+					createTensor(tensor{source: t}, layers[layerIndex].bts, layerIndex)
+				}
 			} else {
 				// load all other tensors on the cpu
 				createTensor(tensor{source: t}, input.bts, -1)

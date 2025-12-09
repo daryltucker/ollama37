@@ -501,7 +501,7 @@ func (s *llamaServer) Load(ctx context.Context, systemInfo ml.SystemInfo, system
 	// Assign all the layers to the CPU for now, they will get reassigned later
 	for i := range s.ggml.KV().BlockCount() {
 		if blk, ok := layers[fmt.Sprintf("blk.%d", i)]; ok {
-			s.mem.CPU.Weights[i] = blk.Size()
+			s.mem.CPU.Weights[i] = blk.Size() + blk.SizeCPUOnly()
 			s.mem.CPU.Cache[i] += kv[i]
 		}
 	}
@@ -610,6 +610,11 @@ func (s *llamaServer) Load(ctx context.Context, systemInfo ml.SystemInfo, system
 
 					s.mem.CPU.Weights[l] = 0
 					s.mem.CPU.Cache[l] = 0
+
+					if blk, ok := layers[fmt.Sprintf("blk.%d", l)]; ok {
+						s.mem.GPUs[i].Weights[l] -= blk.SizeCPUOnly()
+						s.mem.CPU.Weights[l] = blk.SizeCPUOnly()
+					}
 				}
 
 				s.mem.GPUs[i].Graph = graphSize
