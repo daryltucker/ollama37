@@ -331,6 +331,7 @@ static __global__ void mul_mat_vec_q(
 
     if constexpr (!has_fusion) {
         GGML_UNUSED_VARS(use_gate, use_bias, use_gate_bias, active_glu, gate_bias, x_bias, tmp_gate);
+        GGML_UNUSED_VARS(x_biases, gate_biases, tmp_shared_gate);
     }
 }
 
