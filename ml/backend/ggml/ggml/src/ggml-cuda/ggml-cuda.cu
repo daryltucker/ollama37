@@ -76,7 +76,7 @@
 #include <string>
 #include <vector>
 
-__constant__ bool ggml_cuda_k80_mode_c;
+
 
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
 
@@ -402,7 +402,6 @@ static ggml_cuda_device_info ggml_cuda_init() {
          GGML_LOG_INFO("%s: OLLAMA_K80_MODE disabled by env (Kepler detected)\n", __func__);
     }
 
-    CUDA_CHECK(cudaMemcpyToSymbol(ggml_cuda_k80_mode_c, &info.k80_mode, sizeof(bool)));
     // << Tesla K80
 
     return info;
