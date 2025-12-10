@@ -78,6 +78,11 @@
 
 
 
+
+// >> Tesla K80
+__constant__ bool ggml_cuda_k80_mode_c;
+// << Tesla K80
+
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
 
 [[noreturn]]
@@ -322,10 +327,24 @@ static ggml_cuda_device_info ggml_cuda_init() {
         info.devices[id].warp_size = 32;
         info.devices[id].smpbo = prop.sharedMemPerBlockOptin;
         info.devices[id].cc = GGML_CUDA_CC_OFFSET_MTHREADS + prop.major * 0x100;
-        info.devices[id].cc += prop.minor * 0x10;
-        GGML_LOG_INFO("  Device %d: %s, compute capability %d.%d, VMM: %s, ID: %s\n",
-                        id, prop.name, prop.major, prop.minor, device_vmm ? "yes" : "no",
-                        ggml_cuda_parse_uuid(prop, id).c_str());
+        if (info.devices[id].cc >= GGML_CUDA_CC_DP4A) {
+            fprintf(stderr, "%s: device %d: %s, compute capability %d.%d, VMM: %s, K80 Mode: %s\n", __func__, id,
+                info.devices[id].name, info.devices[id].cc / 100, info.devices[id].cc % 100,
+                info.devices[id].vmm ? "yes" : "no", info.k80_mode ? "yes" : "no");
+        } else {
+            fprintf(stderr, "%s: device %d: %s, compute capability %d.%d, VMM: %s\n", __func__, id,
+                info.devices[id].name, info.devices[id].cc / 100, info.devices[id].cc % 100,
+                info.devices[id].vmm ? "yes" : "no");
+        }
+
+        // >> Tesla K80
+        CUDA_CHECK(cudaMemcpyToSymbol(ggml_cuda_k80_mode_c, &info.k80_mode, sizeof(bool)));
+        // << Tesla K8010*prop.minor;
+#ifdef __CUDA_ARCH_LIST__
+        if (std::getenv("GGML_CUDA_INIT") != NULL) {
+            GGML_ASSERT(ggml_cuda_has_arch(info.devices[id].cc) && "ggml was not compiled with support for this arch");
+        }
+#endif // defined(__CUDA_ARCH_LIST__)
 #else
         info.devices[id].smpbo = prop.sharedMemPerBlockOptin;
         info.devices[id].cc = 100*prop.major + 10*prop.minor;
@@ -401,6 +420,8 @@ static ggml_cuda_device_info ggml_cuda_init() {
     } else if (found_kepler) {
          GGML_LOG_INFO("%s: OLLAMA_K80_MODE disabled by env (Kepler detected)\n", __func__);
     }
+
+    CUDA_CHECK(cudaMemcpyToSymbol(ggml_cuda_k80_mode_c, &info.k80_mode, sizeof(bool)));
 
     // << Tesla K80
 
