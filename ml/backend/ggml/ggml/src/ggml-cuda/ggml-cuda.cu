@@ -79,9 +79,7 @@
 
 
 
-// >> Tesla K80
-__constant__ bool ggml_cuda_k80_mode_c;
-// << Tesla K80
+
 
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
 
@@ -402,27 +400,9 @@ static ggml_cuda_device_info ggml_cuda_init() {
         }
     }
 
-    info.k80_mode = found_kepler;
-
-    // Override with env var
-    const char * k80_env = getenv("OLLAMA_K80_MODE");
-    if (k80_env) {
-        std::string val = k80_env;
-        if (val == "1" || val == "true" || val == "True" || val == "TRUE" || val == "yes") {
-            info.k80_mode = true;
-        } else {
-            info.k80_mode = false;
-        }
+    if (found_kepler) {
+         GGML_LOG_INFO("%s: Kepler architecture detected\n", __func__);
     }
-
-    if (info.k80_mode) {
-         GGML_LOG_INFO("%s: OLLAMA_K80_MODE enabled%s\n", __func__, k80_env ? " (forced by env)" : " (auto-detected)");
-    } else if (found_kepler) {
-         GGML_LOG_INFO("%s: OLLAMA_K80_MODE disabled by env (Kepler detected)\n", __func__);
-    }
-
-    CUDA_CHECK(cudaMemcpyToSymbol(ggml_cuda_k80_mode_c, &info.k80_mode, sizeof(bool)));
-
     // << Tesla K80
 
     return info;

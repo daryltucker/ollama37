@@ -41,9 +41,7 @@
 
 extern bool reserving_graph;
 
-// >> Tesla K80
-extern __constant__ bool ggml_cuda_k80_mode_c;
-// << Tesla K80
+
 
 // If we are reserving the graph, pointers might be invalid and will fail if cudaMemcpyAsync tries to validate them.
 // However, since we don't actually expect a result, we don't need to actually do the memcpy.
@@ -590,7 +588,8 @@ static __device__ __forceinline__ int ggml_cuda_dp4a(const int a, const int b, i
 #else // __CUDA_ARCH__ >= GGML_CUDA_CC_DP4A || defined(GGML_USE_MUSA)
     // >> Tesla K80
     // Optimized register-based fallback for Kepler
-    if (ggml_cuda_k80_mode_c) {
+#if __CUDA_ARCH__ < 500
+    {
         int res = c;
         res += ((a << 24) >> 24) * ((b << 24) >> 24);
         res += ((a << 16) >> 24) * ((b << 16) >> 24);
@@ -598,11 +597,12 @@ static __device__ __forceinline__ int ggml_cuda_dp4a(const int a, const int b, i
         res += ( a        >> 24) * ( b        >> 24);
         return res;
     }
+#else
     // << Tesla K80
-
     const int8_t * a8 = (const int8_t *) &a;
     const int8_t * b8 = (const int8_t *) &b;
     return c + a8[0]*b8[0] + a8[1]*b8[1] + a8[2]*b8[2] + a8[3]*b8[3];
+#endif // __CUDA_ARCH__ < 500
 
 #endif // __CUDA_ARCH__ >= GGML_CUDA_CC_DP4A || defined(GGML_USE_MUSA)
 
