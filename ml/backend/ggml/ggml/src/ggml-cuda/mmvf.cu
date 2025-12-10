@@ -75,6 +75,10 @@ static __global__ void mul_mat_vec_f(
         buf_iw_gate = (float *) (data_mmv + warp_size*sizeof(float));
     }
 
+    // >> Tesla K80
+    GGML_UNUSED_VARS(buf_iw, buf_iw_gate);
+    // << Tesla K80
+
     if (block_size > warp_size) {
         if (tid < warp_size) {
             buf_iw[tid] = 0.0f;
