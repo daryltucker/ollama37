@@ -40,11 +40,12 @@
 
 extern bool reserving_graph;
 
-// >> Tesla K80
-extern __constant__ bool ggml_cuda_k80_mode_c;
-// << Tesla K80
+extern const int ggml_cuda_info_initialized;
 
+// K80 mode accessor (defined in ggml-cuda.cu)
+__device__ __forceinline__ bool ggml_cuda_get_k80_mode();
 
+void ggml_cuda_op_arange(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 // If we are reserving the graph, pointers might be invalid and will fail if cudaMemcpyAsync tries to validate them.
 // However, since we don't actually expect a result, we don't need to actually do the memcpy.
 static cudaError_t cudaMemcpyAsyncReserve ( void* dst, const void* src, size_t count, cudaMemcpyKind kind, cudaStream_t stream = 0 ) {
@@ -590,7 +591,7 @@ static __device__ __forceinline__ int ggml_cuda_dp4a(const int a, const int b, i
 #else // __CUDA_ARCH__ >= GGML_CUDA_CC_DP4A || defined(GGML_USE_MUSA)
     // >> Tesla K80
     // Optimized register-based fallback for Kepler
-    if (ggml_cuda_k80_mode_c) {
+    if (ggml_cuda_get_k80_mode()) {
         // Optimized register-based fallback for Kepler
         int res = c;
         res += ((a << 24) >> 24) * ((b << 24) >> 24);

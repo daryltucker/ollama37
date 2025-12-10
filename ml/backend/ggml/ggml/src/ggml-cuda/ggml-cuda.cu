@@ -79,6 +79,11 @@
 
 // >> Tesla K80
 __constant__ bool ggml_cuda_k80_mode_c = false;
+
+// Device accessor function for K80 mode (allows other .cu files to check without direct constant access)
+__device__ __forceinline__ bool ggml_cuda_get_k80_mode() {
+    return ggml_cuda_k80_mode_c;
+}
 // << Tesla K80
 
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
