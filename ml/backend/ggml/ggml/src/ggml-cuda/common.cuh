@@ -1169,11 +1169,12 @@ struct ggml_cuda_concurrent_event {
             if (e != nullptr) {
                 CUDA_CHECK(cudaEventDestroy(e));
             }
-        }k
+        }
+    }
 };
 
 struct ggml_cuda_stream_context {
-    std::vector<const ggml_tensor *>                       k             original_nodes;
+    std::vector<const ggml_tensor *> original_nodes;
     std::unordered_map<const ggml_tensor *, ggml_cuda_concurrent_event> concurrent_events;
 
     void reset() {
