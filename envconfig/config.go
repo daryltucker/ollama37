@@ -209,8 +209,6 @@ var (
 	// >> Tesla K80
 	// CpuOffloadTypes sets the tensor types to offload to CPU
 	CpuOffloadTypes = String("OLLAMA_CPU_OFFLOAD_TYPES")
-	// K80Mode enables specific optimizations for Tesla K80 GPUs
-	K80Mode = Bool("OLLAMA_K80_MODE")
 	// << Tesla K80
 )
 
@@ -301,7 +299,6 @@ func AsMap() map[string]EnvVar {
 		"OLLAMA_REMOTES":           {"OLLAMA_REMOTES", Remotes(), "Allowed hosts for remote models (default \"ollama.com\")"},
 		// >> Tesla K80
 		"OLLAMA_CPU_OFFLOAD_TYPES": {"OLLAMA_CPU_OFFLOAD_TYPES", CpuOffloadTypes(), "Comma-separated list of tensor types to offload to CPU"},
-		"OLLAMA_K80_MODE":          {"OLLAMA_K80_MODE", K80Mode(), "Enable Tesla K80 specific optimizations"},
 		// << Tesla K80
 
 		// Informational

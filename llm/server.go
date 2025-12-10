@@ -231,9 +231,6 @@ func NewLlamaServer(systemInfo ml.SystemInfo, gpus []ml.DeviceInfo, modelPath st
 	if t := envconfig.CpuOffloadTypes(); t != "" {
 		extraEnvs["OLLAMA_CPU_OFFLOAD_TYPES"] = t
 	}
-	if envconfig.K80Mode() {
-		extraEnvs["OLLAMA_K80_MODE"] = "1"
-	}
 	// << Tesla K80
 
 	cmd, port, err := StartRunner(

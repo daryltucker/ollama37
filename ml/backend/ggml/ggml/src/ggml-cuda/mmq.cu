@@ -279,12 +279,7 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11) {
     }
 
     if (ggml_cuda_highest_compiled_arch(cc) < GGML_CUDA_CC_DP4A) {
-        // >> Tesla K80
-        // Enable MMQ for Kepler (sm_35+) and newer using emulated dp4a if needed
-        if (!ggml_cuda_info().k80_mode) {
-            return false;
-        }
-        // << Tesla K80
+        return false;
     }
 
 #ifdef GGML_CUDA_FORCE_MMQ

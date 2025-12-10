@@ -915,8 +915,8 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ3_S> {
 
 //////////////////////
 
+
 struct ggml_cuda_device_info {
-    bool k80_mode;                  // >> Tesla K80
     int device_count;
 
     struct cuda_device_info {

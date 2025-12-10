@@ -78,9 +78,6 @@
 
 
 
-
-
-
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
 
 [[noreturn]]
@@ -326,18 +323,14 @@ static ggml_cuda_device_info ggml_cuda_init() {
         info.devices[id].smpbo = prop.sharedMemPerBlockOptin;
         info.devices[id].cc = GGML_CUDA_CC_OFFSET_MTHREADS + prop.major * 0x100;
         if (info.devices[id].cc >= GGML_CUDA_CC_DP4A) {
-            fprintf(stderr, "%s: device %d: %s, compute capability %d.%d, VMM: %s, K80 Mode: %s\n", __func__, id,
+            fprintf(stderr, "%s: device %d: %s, compute capability %d.%d, VMM: %s\n", __func__, id,
                 info.devices[id].name, info.devices[id].cc / 100, info.devices[id].cc % 100,
-                info.devices[id].vmm ? "yes" : "no", info.k80_mode ? "yes" : "no");
+                info.devices[id].vmm ? "yes" : "no");
         } else {
             fprintf(stderr, "%s: device %d: %s, compute capability %d.%d, VMM: %s\n", __func__, id,
                 info.devices[id].name, info.devices[id].cc / 100, info.devices[id].cc % 100,
                 info.devices[id].vmm ? "yes" : "no");
         }
-
-        // >> Tesla K80
-        CUDA_CHECK(cudaMemcpyToSymbol(ggml_cuda_k80_mode_c, &info.k80_mode, sizeof(bool)));
-        // << Tesla K8010*prop.minor;
 #ifdef __CUDA_ARCH_LIST__
         if (std::getenv("GGML_CUDA_INIT") != NULL) {
             GGML_ASSERT(ggml_cuda_has_arch(info.devices[id].cc) && "ggml was not compiled with support for this arch");
@@ -390,20 +383,6 @@ static ggml_cuda_device_info ggml_cuda_init() {
 
     // configure logging to stdout
     // CUBLAS_CHECK(cublasLoggerConfigure(1, 1, 0, nullptr));
-
-    // >> Tesla K80
-    // Auto-detect Kepler devices (CC 3.7 like K80, or 3.5 like K40)
-    bool found_kepler = false;
-    for (int id = 0; id < info.device_count; ++id) {
-        if (info.devices[id].cc == 370 || info.devices[id].cc == 350) {
-            found_kepler = true;
-        }
-    }
-
-    if (found_kepler) {
-         GGML_LOG_INFO("%s: Kepler architecture detected\n", __func__);
-    }
-    // << Tesla K80
 
     return info;
 }
@@ -558,18 +537,6 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
         granularity(ggml_cuda_info().devices[device].vmm_granularity),
         allocate(alloc) {
         // >> Tesla K80
-        if (ggml_cuda_info().k80_mode) {
-            // Get actual GPU memory and set a reasonable max pool size
-            size_t free_mem, total_mem;
-            ggml_cuda_set_device(device);
-            CUDA_CHECK(cudaMemGetInfo(&free_mem, &total_mem));
-
-            // Use 90% of total GPU memory as max, or default 32GB, whichever is smaller
-            max_pool_size = std::min(CUDA_POOL_VMM_MAX_SIZE, (size_t)(total_mem * 0.9));
-
-            // CRITICAL: Align max_pool_size to granularity to avoid CUDA_ERROR_INVALID_VALUE
-            max_pool_size = ((max_pool_size + granularity - 1) / granularity) * granularity;
-        }
         // << Tesla K80
         if (!allocate) {
             pool_addr = (CUdeviceptr)CUDA_ALIGNMENT;
@@ -602,24 +569,7 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
             size_t reserve_size = size - avail;
             reserve_size = granularity * ((reserve_size + granularity - 1) / granularity);
 
-            // >> Tesla K80
-            if (ggml_cuda_info().k80_mode) {
-                // Check if we have enough free memory before attempting allocation
-                size_t free_mem, total_mem;
-                ggml_cuda_set_device(device);
-                CUDA_CHECK(cudaMemGetInfo(&free_mem, &total_mem));
 
-                if (reserve_size > free_mem) {
-                    // Not enough free memory, reduce reserve_size to what's available
-                    reserve_size = (free_mem / granularity) * granularity; // round down to granularity
-                    if (reserve_size == 0) {
-                        GGML_LOG_WARN("%s: Not enough free GPU memory on device %d (requested: %zu, available: %zu)\n",
-                                      __func__, device, size, free_mem);
-                        return nullptr;
-                    }
-                }
-            }
-            // << Tesla K80
 
             GGML_ASSERT(pool_size + reserve_size <= max_pool_size);
 

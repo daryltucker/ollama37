@@ -8,6 +8,9 @@ using namespace cub;
 
 
 #ifdef GGML_CUDA_USE_CUB
+// >> Tesla K80
+// Kernel definitions moved for visibility on older toolchains (Kepler/CUDA 11.x)
+// << Tesla K80
 static __global__ void init_indices(int * indices, const int ncols, const int nrows) {
     const int col = blockIdx.x * blockDim.x + threadIdx.x;
     const int row = blockIdx.y;
