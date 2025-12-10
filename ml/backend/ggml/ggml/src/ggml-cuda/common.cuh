@@ -45,6 +45,7 @@ extern const int ggml_cuda_info_initialized;
 // K80 mode accessor (defined in ggml-cuda.cu)
 __device__ __forceinline__ bool ggml_cuda_get_k80_mode();
 
+struct ggml_backend_cuda_context;
 void ggml_cuda_op_arange(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 // If we are reserving the graph, pointers might be invalid and will fail if cudaMemcpyAsync tries to validate them.
 // However, since we don't actually expect a result, we don't need to actually do the memcpy.
