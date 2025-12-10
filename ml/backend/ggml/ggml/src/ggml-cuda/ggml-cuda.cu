@@ -77,6 +77,9 @@
 #include <vector>
 
 
+// >> Tesla K80
+__constant__ bool ggml_cuda_k80_mode_c = false;
+// << Tesla K80
 
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
 
@@ -383,6 +386,15 @@ static ggml_cuda_device_info ggml_cuda_init() {
 
     // configure logging to stdout
     // CUBLAS_CHECK(cublasLoggerConfigure(1, 1, 0, nullptr));
+
+    // >> Tesla K80
+    // Read OLLAMA_K80_MODE once at startup and copy to device constant
+    bool k80_mode = std::getenv("OLLAMA_K80_MODE") != nullptr;
+    CUDA_CHECK(cudaMemcpyToSymbol(ggml_cuda_k80_mode_c, &k80_mode, sizeof(bool)));
+    if (k80_mode) {
+        GGML_LOG_INFO("%s: Tesla K80 optimized mode enabled via OLLAMA_K80_MODE\n", __func__);
+    }
+    // << Tesla K80
 
     return info;
 }

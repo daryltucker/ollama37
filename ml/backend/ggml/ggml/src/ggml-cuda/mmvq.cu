@@ -189,7 +189,9 @@ static __global__ void mul_mat_vec_q(
     }
 
     const uint32_t channel_bias = ids ? channel_x : channel_dst;
-    (void)channel_bias;
+    // >> Tesla K80
+    GGML_UNUSED(channel_bias);
+    // << Tesla K80
 
     float x_biases[ncols_dst]    = { 0.0f };
     float gate_biases[ncols_dst] = { 0.0f };

@@ -130,7 +130,7 @@ list(APPEND GGML_SOURCES_CUDA ${SRCS})
 
     set(CUDA_CXX_FLAGS "")
 
-    set(CUDA_FLAGS -use_fast_math -extended-lambda -Wno-deprecated-gpu-targets)
+    set(CUDA_FLAGS -use_fast_math -extended-lambda)
 
     if (GGML_CUDA_DEBUG)
         list(APPEND CUDA_FLAGS -lineinfo)
