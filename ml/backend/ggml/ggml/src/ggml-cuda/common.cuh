@@ -37,6 +37,8 @@
 #include "vendors/cuda.h"
 #endif // defined(GGML_USE_HIP)
 
+extern __constant__ bool ggml_cuda_k80_mode_c;
+
 extern bool reserving_graph;
 
 // If we are reserving the graph, pointers might be invalid and will fail if cudaMemcpyAsync tries to validate them.
@@ -583,14 +585,20 @@ static __device__ __forceinline__ int ggml_cuda_dp4a(const int a, const int b, i
     return __dp4a(a, b, c);
 #else // __CUDA_ARCH__ >= GGML_CUDA_CC_DP4A || defined(GGML_USE_MUSA)
     // >> Tesla K80
-    // Optimized register-based fallback for Kepler
-    int res = c;
-    res += ((a << 24) >> 24) * ((b << 24) >> 24);
-    res += ((a << 16) >> 24) * ((b << 16) >> 24);
-    res += ((a <<  8) >> 24) * ((b <<  8) >> 24);
-    res += ( a        >> 24) * ( b        >> 24);
-    return res;
+    if (ggml_cuda_k80_mode_c) {
+        // Optimized register-based fallback for Kepler
+        int res = c;
+        res += ((a << 24) >> 24) * ((b << 24) >> 24);
+        res += ((a << 16) >> 24) * ((b << 16) >> 24);
+        res += ((a <<  8) >> 24) * ((b <<  8) >> 24);
+        res += ( a        >> 24) * ( b        >> 24);
+        return res;
+    }
     // << Tesla K80
+
+    const int8_t * a8 = (const int8_t *) &a;
+    const int8_t * b8 = (const int8_t *) &b;
+    return c + a8[0]*b8[0] + a8[1]*b8[1] + a8[2]*b8[2] + a8[3]*b8[3];
 #endif // __CUDA_ARCH__ >= GGML_CUDA_CC_DP4A || defined(GGML_USE_MUSA)
 
 #endif // defined(GGML_USE_HIP)
@@ -903,6 +911,7 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ3_S> {
 //////////////////////
 
 struct ggml_cuda_device_info {
+    bool k80_mode;                  // >> Tesla K80
     int device_count;
 
     struct cuda_device_info {
@@ -1160,12 +1169,11 @@ struct ggml_cuda_concurrent_event {
             if (e != nullptr) {
                 CUDA_CHECK(cudaEventDestroy(e));
             }
-        }
-    }
+        }k
 };
 
 struct ggml_cuda_stream_context {
-    std::vector<const ggml_tensor *>                                    original_nodes;
+    std::vector<const ggml_tensor *>                       k             original_nodes;
     std::unordered_map<const ggml_tensor *, ggml_cuda_concurrent_event> concurrent_events;
 
     void reset() {

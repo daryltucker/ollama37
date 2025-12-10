@@ -76,6 +76,8 @@
 #include <string>
 #include <vector>
 
+__constant__ bool ggml_cuda_k80_mode_c;
+
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
 
 [[noreturn]]
@@ -238,6 +240,7 @@ static std::string ggml_cuda_parse_uuid(cudaDeviceProp prop, int device_num) {
 static ggml_cuda_device_info ggml_cuda_init() {
     ggml_cuda_device_info info = {};
 
+
     cudaError_t err = cudaGetDeviceCount(&info.device_count);
     if (err != cudaSuccess) {
         GGML_LOG_ERROR("%s: failed to initialize " GGML_CUDA_NAME ": %s\n", __func__, cudaGetErrorString(err));
@@ -370,6 +373,37 @@ static ggml_cuda_device_info ggml_cuda_init() {
 
     // configure logging to stdout
     // CUBLAS_CHECK(cublasLoggerConfigure(1, 1, 0, nullptr));
+
+    // >> Tesla K80
+    // Auto-detect Kepler devices (CC 3.7 like K80, or 3.5 like K40)
+    bool found_kepler = false;
+    for (int id = 0; id < info.device_count; ++id) {
+        if (info.devices[id].cc == 370 || info.devices[id].cc == 350) {
+            found_kepler = true;
+        }
+    }
+
+    info.k80_mode = found_kepler;
+
+    // Override with env var
+    const char * k80_env = getenv("OLLAMA_K80_MODE");
+    if (k80_env) {
+        std::string val = k80_env;
+        if (val == "1" || val == "true" || val == "True" || val == "TRUE" || val == "yes") {
+            info.k80_mode = true;
+        } else {
+            info.k80_mode = false;
+        }
+    }
+
+    if (info.k80_mode) {
+         GGML_LOG_INFO("%s: OLLAMA_K80_MODE enabled%s\n", __func__, k80_env ? " (forced by env)" : " (auto-detected)");
+    } else if (found_kepler) {
+         GGML_LOG_INFO("%s: OLLAMA_K80_MODE disabled by env (Kepler detected)\n", __func__);
+    }
+
+    CUDA_CHECK(cudaMemcpyToSymbol(ggml_cuda_k80_mode_c, &info.k80_mode, sizeof(bool)));
+    // << Tesla K80
 
     return info;
 }
@@ -524,7 +558,7 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
         granularity(ggml_cuda_info().devices[device].vmm_granularity),
         allocate(alloc) {
         // >> Tesla K80
-        {
+        if (ggml_cuda_info().k80_mode) {
             // Get actual GPU memory and set a reasonable max pool size
             size_t free_mem, total_mem;
             ggml_cuda_set_device(device);
@@ -569,18 +603,20 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
             reserve_size = granularity * ((reserve_size + granularity - 1) / granularity);
 
             // >> Tesla K80
-            // Check if we have enough free memory before attempting allocation
-            size_t free_mem, total_mem;
-            ggml_cuda_set_device(device);
-            CUDA_CHECK(cudaMemGetInfo(&free_mem, &total_mem));
+            if (ggml_cuda_info().k80_mode) {
+                // Check if we have enough free memory before attempting allocation
+                size_t free_mem, total_mem;
+                ggml_cuda_set_device(device);
+                CUDA_CHECK(cudaMemGetInfo(&free_mem, &total_mem));
 
-            if (reserve_size > free_mem) {
-                // Not enough free memory, reduce reserve_size to what's available
-                reserve_size = (free_mem / granularity) * granularity; // round down to granularity
-                if (reserve_size == 0) {
-                    GGML_LOG_WARN("%s: Not enough free GPU memory on device %d (requested: %zu, available: %zu)\n",
-                                  __func__, device, size, free_mem);
-                    return nullptr;
+                if (reserve_size > free_mem) {
+                    // Not enough free memory, reduce reserve_size to what's available
+                    reserve_size = (free_mem / granularity) * granularity; // round down to granularity
+                    if (reserve_size == 0) {
+                        GGML_LOG_WARN("%s: Not enough free GPU memory on device %d (requested: %zu, available: %zu)\n",
+                                      __func__, device, size, free_mem);
+                        return nullptr;
+                    }
                 }
             }
             // << Tesla K80
