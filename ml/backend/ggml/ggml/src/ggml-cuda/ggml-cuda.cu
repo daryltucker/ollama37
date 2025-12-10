@@ -554,6 +554,18 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
         granularity(ggml_cuda_info().devices[device].vmm_granularity),
         allocate(alloc) {
         // >> Tesla K80
+        {
+            // Get actual GPU memory and set a reasonable max pool size
+            size_t free_mem, total_mem;
+            ggml_cuda_set_device(device);
+            CUDA_CHECK(cudaMemGetInfo(&free_mem, &total_mem));
+
+            // Use 90% of total GPU memory as max, or default 32GB, whichever is smaller
+            max_pool_size = std::min(CUDA_POOL_VMM_MAX_SIZE, (size_t)(total_mem * 0.9));
+
+            // CRITICAL: Align max_pool_size to granularity to avoid CUDA_ERROR_INVALID_VALUE
+            max_pool_size = ((max_pool_size + granularity - 1) / granularity) * granularity;
+        }
         // << Tesla K80
         if (!allocate) {
             pool_addr = (CUdeviceptr)CUDA_ALIGNMENT;
@@ -587,6 +599,19 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
             reserve_size = granularity * ((reserve_size + granularity - 1) / granularity);
 
 
+
+            // >> Tesla K80
+            // Check if we have enough free memory before attempting allocation
+            size_t free_mem, total_mem;
+            ggml_cuda_set_device(device);
+            CUDA_CHECK(cudaMemGetInfo(&free_mem, &total_mem));
+
+            if (free_mem < reserve_size * 1.05) {
+                GGML_LOG_WARN("%s: Not enough free GPU memory on device %d (requested: %zu, available: %zu)\n",
+                              __func__, device, reserve_size, free_mem);
+                return nullptr;
+            }
+            // << Tesla K80
 
             GGML_ASSERT(pool_size + reserve_size <= max_pool_size);
 
