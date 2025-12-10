@@ -41,6 +41,10 @@
 
 extern bool reserving_graph;
 
+// >> Tesla K80
+extern __constant__ bool ggml_cuda_k80_mode_c;
+// << Tesla K80
+
 // If we are reserving the graph, pointers might be invalid and will fail if cudaMemcpyAsync tries to validate them.
 // However, since we don't actually expect a result, we don't need to actually do the memcpy.
 static cudaError_t cudaMemcpyAsyncReserve ( void* dst, const void* src, size_t count, cudaMemcpyKind kind, cudaStream_t stream = 0 ) {
