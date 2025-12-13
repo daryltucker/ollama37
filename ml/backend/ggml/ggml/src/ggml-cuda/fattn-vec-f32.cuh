@@ -10,6 +10,8 @@ static __global__ void flash_attn_vec_ext_f32(
         const char * __restrict__ K,
         const char * __restrict__ V,
         const char * __restrict__ mask,
+        const char * __restrict__ sinks,
+        const int  * __restrict__ KV_max,
         float      * __restrict__ dst,
         float2     * __restrict__ dst_meta,
         const float scale,
@@ -18,45 +20,30 @@ static __global__ void flash_attn_vec_ext_f32(
         const float m1,
         const uint32_t n_head_log2,
         const float logit_softcap,
-        const int ne00,
-        const int ne01,
-        const int ne02,
-        const int ne03,
-        const int ne10,
-        const int ne11,
-        const int ne12,
-        const int ne13,
-        const int ne31,
-        const int nb31,
-        const int nb01,
-        const int nb02,
-        const int nb03,
-        const int nb11,
-        const int nb12,
-        const int nb13,
-        const int nb21,
-        const int nb22,
-        const int nb23,
-        const int ne0,
-        const int ne1,
-        const int ne2,
-        const int ne3) {
+        const int ne00, const uint3   ne01, const int ne02, const int ne03,
+        const int nb01, const int nb02, const int nb03,
+        const int ne10, const int ne11, const int ne12, const int ne13,
+        const int nb11, const int nb12, const int64_t nb13,
+        const int nb21, const int nb22, const int64_t nb23,
+        const int ne31, const int ne32, const int ne33,
+        const int nb31, const int nb32, const int64_t nb33) {
 #ifdef FLASH_ATTN_AVAILABLE
 
     // Skip unused kernel variants for faster compilation:
     if (use_logit_softcap && !(D == 128 || D == 256)) {
         GGML_UNUSED(Q); GGML_UNUSED(K); GGML_UNUSED(V); GGML_UNUSED(mask);
+        GGML_UNUSED(sinks); GGML_UNUSED(KV_max);
         GGML_UNUSED(dst); GGML_UNUSED(dst_meta); GGML_UNUSED(scale);
         GGML_UNUSED(max_bias); GGML_UNUSED(m0); GGML_UNUSED(m1);
         GGML_UNUSED(n_head_log2); GGML_UNUSED(logit_softcap);
         GGML_UNUSED(ne00); GGML_UNUSED(ne01); GGML_UNUSED(ne02);
-        GGML_UNUSED(ne03); GGML_UNUSED(ne10); GGML_UNUSED(ne11);
-        GGML_UNUSED(ne12); GGML_UNUSED(ne13); GGML_UNUSED(ne31);
-        GGML_UNUSED(nb31); GGML_UNUSED(nb01); GGML_UNUSED(nb02);
-        GGML_UNUSED(nb03); GGML_UNUSED(nb11); GGML_UNUSED(nb12);
-        GGML_UNUSED(nb13); GGML_UNUSED(nb21); GGML_UNUSED(nb22);
-        GGML_UNUSED(nb23); GGML_UNUSED(ne0); GGML_UNUSED(ne1);
-        GGML_UNUSED(ne2); GGML_UNUSED(ne3);
+        GGML_UNUSED(ne03); GGML_UNUSED(nb01); GGML_UNUSED(nb02);
+        GGML_UNUSED(nb03); GGML_UNUSED(ne10); GGML_UNUSED(ne11);
+        GGML_UNUSED(ne12); GGML_UNUSED(ne13); GGML_UNUSED(nb11);
+        GGML_UNUSED(nb12); GGML_UNUSED(nb13); GGML_UNUSED(nb21);
+        GGML_UNUSED(nb22); GGML_UNUSED(nb23); GGML_UNUSED(ne31);
+        GGML_UNUSED(ne32); GGML_UNUSED(ne33); GGML_UNUSED(nb31);
+        GGML_UNUSED(nb32); GGML_UNUSED(nb33);
         NO_DEVICE_CODE;
         return;
     }
@@ -124,7 +111,7 @@ static __global__ void flash_attn_vec_ext_f32(
             float2 * tmp_q_ds  = (float2 *) (tmp_q_i32 + D/sizeof(int));
 
             // Set memory to zero if out of bounds:
-            if (ncols > 2 && ic0 + j >= ne01) {
+            if (ncols > 2 && ic0 + j >= ne01.z) {
 #pragma unroll
                 for (int i0 = 0; i0 < int(D/sizeof(int)); i0 += WARP_SIZE) {
                     const int i = i0 + threadIdx.x;
@@ -169,7 +156,7 @@ static __global__ void flash_attn_vec_ext_f32(
             for (int i0 = 0; i0 < D/2; i0 += WARP_SIZE) {
                 const int i = i0 + threadIdx.x;
 
-                Q_f2[j][i0/WARP_SIZE]    = ncols <= 2 || ic0 + j < ne01 ? Q_f2_j[i] : make_float2(0.0f, 0.0f);
+                Q_f2[j][i0/WARP_SIZE]    = ncols <= 2 || ic0 + j < ne01.z ? Q_f2_j[i] : make_float2(0.0f, 0.0f);
                 Q_f2[j][i0/WARP_SIZE].x *= scale;
                 Q_f2[j][i0/WARP_SIZE].y *= scale;
             }
@@ -270,7 +257,7 @@ static __global__ void flash_attn_vec_ext_f32(
 
 #pragma unroll
     for (int j_VKQ = 0; j_VKQ < ncols; ++j_VKQ) {
-        if (ncols > 2 && ic0 + j_VKQ >= ne01) {
+        if (ncols > 2 && ic0 + j_VKQ >= ne01.z) {
             break;
         }
 
@@ -285,20 +272,22 @@ static __global__ void flash_attn_vec_ext_f32(
         dst[j_dst*D*gridDim.z + D*blockIdx.z + tid] = dst_val;
     }
 
-    if (gridDim.y != 1 && tid < ncols && (ncols <= 2 || ic0 + tid < ne01)) {
+    if (gridDim.y != 1 && tid < ncols && (ncols <= 2 || ic0 + tid < ne01.z)) {
         dst_meta[((ic0 + tid)*gridDim.z + blockIdx.z) * gridDim.y + blockIdx.y] = make_float2(kqmax[tid], kqsum[tid]);
     }
 #else
     GGML_UNUSED(Q); GGML_UNUSED(K); GGML_UNUSED(V); GGML_UNUSED(mask);
+    GGML_UNUSED(sinks); GGML_UNUSED(KV_max);
     GGML_UNUSED(dst); GGML_UNUSED(dst_meta); GGML_UNUSED(scale);
     GGML_UNUSED(max_bias); GGML_UNUSED(m0); GGML_UNUSED(m1);
-    GGML_UNUSED(n_head_log2); GGML_UNUSED(logit_softcap); GGML_UNUSED(ne00);
-    GGML_UNUSED(ne01); GGML_UNUSED(ne02); GGML_UNUSED(ne03); GGML_UNUSED(ne10);
-    GGML_UNUSED(ne11); GGML_UNUSED(ne12); GGML_UNUSED(ne13); GGML_UNUSED(ne31);
-    GGML_UNUSED(nb31); GGML_UNUSED(nb01); GGML_UNUSED(nb02); GGML_UNUSED(nb03);
-    GGML_UNUSED(nb11); GGML_UNUSED(nb12); GGML_UNUSED(nb13); GGML_UNUSED(nb21);
-    GGML_UNUSED(nb22); GGML_UNUSED(nb23); GGML_UNUSED(ne0); GGML_UNUSED(ne1);
-    GGML_UNUSED(ne2); GGML_UNUSED(ne3);
+    GGML_UNUSED(ne00); GGML_UNUSED(ne01); GGML_UNUSED(ne02);
+    GGML_UNUSED(ne03); GGML_UNUSED(nb01); GGML_UNUSED(nb02);
+    GGML_UNUSED(nb03); GGML_UNUSED(ne10); GGML_UNUSED(ne11);
+    GGML_UNUSED(ne12); GGML_UNUSED(ne13); GGML_UNUSED(nb11);
+    GGML_UNUSED(nb12); GGML_UNUSED(nb13); GGML_UNUSED(nb21);
+    GGML_UNUSED(nb22); GGML_UNUSED(nb23); GGML_UNUSED(ne31);
+    GGML_UNUSED(ne32); GGML_UNUSED(ne33); GGML_UNUSED(nb31);
+    GGML_UNUSED(nb32); GGML_UNUSED(nb33);
     NO_DEVICE_CODE;
 #endif // FLASH_ATTN_AVAILABLE
 }

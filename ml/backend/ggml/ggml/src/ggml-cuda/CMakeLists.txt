@@ -4,9 +4,10 @@ find_package(CUDAToolkit)
 
 if (CUDAToolkit_FOUND)
     message(STATUS "CUDA Toolkit found")
-    set(CMAKE_CUDA_ARCHITECTURES "37;50;61;70;75;80")
+
     if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
         # native == GPUs available at build time
+        # 37     == Kepler (Tesla K80), older architecture with limited features
         # 50     == Maxwell, lowest CUDA 12 standard
         # 60     == P100, FP16 CUDA intrinsics
         # 61     == Pascal, __dp4a instruction (per-byte integer dot product)
@@ -24,17 +25,20 @@ if (CUDAToolkit_FOUND)
         #     for best performance and to also build real architectures for the most commonly used GPUs.
         if (GGML_NATIVE AND CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.6" AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.24")
             set(CMAKE_CUDA_ARCHITECTURES "native")
-        elseif(GGML_CUDA_F16 OR GGML_CUDA_DMMV_F16)
-            if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.8")
-                set(CMAKE_CUDA_ARCHITECTURES "60-virtual;61-virtual;70-virtual;75-virtual;80-virtual;86-real;89-real")
-            else()
-                set(CMAKE_CUDA_ARCHITECTURES "60-virtual;61-virtual;70-virtual;75-virtual;80-virtual;86-real")
-            endif()
         else()
+            # For CUDA versions that still support older architectures (pre-CUDA 13)
+            if (CUDAToolkit_VERSION VERSION_LESS "13")
+                # Add compute capability 3.7 for Tesla K80 support (Kepler architecture)
+                # Note: CUDA 11.x still supports Kepler, but CUDA 12+ drops it
+                list(APPEND CMAKE_CUDA_ARCHITECTURES 37-virtual 50-virtual 61-virtual 70-virtual)
+            endif ()
+
+            # Modern architectures supported by all recent CUDA versions
+            list(APPEND CMAKE_CUDA_ARCHITECTURES 75-virtual 80-virtual 86-real)
+
+            # Newest architectures requiring CUDA 11.8+
             if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.8")
-                set(CMAKE_CUDA_ARCHITECTURES "50-virtual;61-virtual;70-virtual;75-virtual;80-virtual;86-real;89-real")
-            else()
-                set(CMAKE_CUDA_ARCHITECTURES "50-virtual;61-virtual;70-virtual;75-virtual;80-virtual;86-real")
+                list(APPEND CMAKE_CUDA_ARCHITECTURES 89-real)
             endif()
         endif()
     endif()
@@ -46,22 +50,43 @@ if (CUDAToolkit_FOUND)
     list(APPEND GGML_HEADERS_CUDA "../../include/ggml-cuda.h")
 
     file(GLOB   GGML_SOURCES_CUDA "*.cu")
+    file(GLOB   SRCS "template-instances/fattn-tile*.cu")
+    list(APPEND GGML_SOURCES_CUDA ${SRCS})
     file(GLOB   SRCS "template-instances/fattn-mma*.cu")
     list(APPEND GGML_SOURCES_CUDA ${SRCS})
-    file(GLOB   SRCS "template-instances/mmq*.cu")
+    file(GLOB   SRCS "template-instances/mmf*.cu")
     list(APPEND GGML_SOURCES_CUDA ${SRCS})
 
-    if (GGML_CUDA_FA_ALL_QUANTS)
-        file(GLOB   SRCS "template-instances/fattn-vec*.cu")
-        list(APPEND GGML_SOURCES_CUDA ${SRCS})
-        add_compile_definitions(GGML_CUDA_FA_ALL_QUANTS)
+    if (NOT DEFINED GGML_CUDA_FA)
+        set(GGML_CUDA_FA ON)
+    endif()
+
+    if (NOT DEFINED GGML_CUDA_MMQ)
+        set(GGML_CUDA_MMQ ON)
+    endif()
+
+    if (GGML_CUDA_FA)
+        if (GGML_CUDA_FA_ALL_QUANTS)
+            file(GLOB   SRCS "template-instances/fattn-vec*.cu")
+            list(APPEND GGML_SOURCES_CUDA ${SRCS})
+            add_compile_definitions(GGML_CUDA_FA_ALL_QUANTS)
+        else()
+            file(GLOB   SRCS "template-instances/fattn-vec*q4_0-q4_0.cu")
+            list(APPEND GGML_SOURCES_CUDA ${SRCS})
+            file(GLOB   SRCS "template-instances/fattn-vec*q8_0-q8_0.cu")
+            list(APPEND GGML_SOURCES_CUDA ${SRCS})
+            file(GLOB   SRCS "template-instances/fattn-vec*f16-f16.cu")
+            list(APPEND GGML_SOURCES_CUDA ${SRCS})
+        endif()
     else()
-        file(GLOB   SRCS "template-instances/fattn-vec*q4_0-q4_0.cu")
+        add_compile_definitions(GGML_CUDA_NO_FA)
+    endif()
+
+    if (GGML_CUDA_MMQ)
+        file(GLOB   SRCS "template-instances/mmq*.cu")
         list(APPEND GGML_SOURCES_CUDA ${SRCS})
-        file(GLOB   SRCS "template-instances/fattn-vec*q8_0-q8_0.cu")
-        list(APPEND GGML_SOURCES_CUDA ${SRCS})
-        file(GLOB   SRCS "template-instances/fattn-vec*f16-f16.cu")
-        list(APPEND GGML_SOURCES_CUDA ${SRCS})
+    else()
+        add_compile_definitions(GGML_CUDA_NO_MMQ)
     endif()
 
     ggml_add_backend_library(ggml-cuda
@@ -87,14 +112,6 @@ if (CUDAToolkit_FOUND)
         add_compile_definitions(GGML_CUDA_NO_VMM)
     endif()
 
-    if (NOT GGML_CUDA_FA)
-        add_compile_definitions(GGML_CUDA_NO_FA)
-    endif()
-
-    if (GGML_CUDA_F16 OR GGML_CUDA_DMMV_F16)
-        add_compile_definitions(GGML_CUDA_F16)
-    endif()
-
     if (GGML_CUDA_NO_PEER_COPY)
         add_compile_definitions(GGML_CUDA_NO_PEER_COPY)
     endif()
@@ -102,12 +119,16 @@ if (CUDAToolkit_FOUND)
     if (GGML_STATIC)
         if (WIN32)
             # As of 12.3.1 CUDA Toolkit for Windows does not offer a static cublas library
-            target_link_libraries(ggml-cuda PRIVATE CUDA::cudart_static CUDA::cublas CUDA::cublasLt)
+            target_link_libraries(ggml-cuda PRIVATE CUDA::cudart_static CUDA::cublas)
         else ()
-            target_link_libraries(ggml-cuda PRIVATE  CUDA::cudart_static CUDA::cublas_static CUDA::cublasLt_static)
+            if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "10.1")
+                target_link_libraries(ggml-cuda PRIVATE  CUDA::cudart_static CUDA::cublas_static CUDA::cublasLt_static)
+            else()
+                target_link_libraries(ggml-cuda PRIVATE  CUDA::cudart_static CUDA::cublas_static)
+            endif()
         endif()
     else()
-        target_link_libraries(ggml-cuda PRIVATE CUDA::cudart CUDA::cublas CUDA::cublasLt)
+        target_link_libraries(ggml-cuda PRIVATE CUDA::cudart CUDA::cublas)
     endif()
 
     if (GGML_CUDA_NO_VMM)
@@ -118,7 +139,21 @@ if (CUDAToolkit_FOUND)
 
     set(CUDA_CXX_FLAGS "")
 
-    set(CUDA_FLAGS -use_fast_math -extended-lambda -Wno-deprecated-gpu-targets)  # >> Tesla K80
+    # Suppress warnings:
+    # 111: missing return statement (false positive with if constexpr)
+    # 177: variable declared but never referenced
+    # 550: variable set but never used
+    # 174: expression has no effect
+    set(CUDA_FLAGS -use_fast_math -extended-lambda)
+    list(APPEND CUDA_FLAGS -diag-suppress=111)
+    list(APPEND CUDA_FLAGS -diag-suppress=177)
+    list(APPEND CUDA_FLAGS -diag-suppress=550)
+    list(APPEND CUDA_FLAGS -diag-suppress=174)
+    list(APPEND CUDA_FLAGS -Wno-deprecated-gpu-targets)
+
+    if (GGML_CUDA_DEBUG)
+        list(APPEND CUDA_FLAGS -lineinfo)
+    endif()
 
     if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "12.8")
         # Options are:

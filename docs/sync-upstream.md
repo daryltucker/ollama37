@@ -74,13 +74,29 @@ Common conflict resolutions:
 
 ```bash
 git add -A
-git commit -m "Merge upstream ollama/ollama main branch while preserving CUDA 3.7 support
+git commit -m "Merge Upstream ollama/ollama Preserving CUDA 3.7 Support
 
-- Added support for new [model name] from upstream
-- Preserved CUDA Compute Capability 3.7 (Tesla K80) support
-- Kept CUDA 11 configuration alongside CUDA 12
-- Maintained all documentation specific to ollama37 fork
+- Preserved CUDA Compute Capability 3.7 (Tesla K80) Support
+- Kept CUDA 11 + 12 Configuration
+- Maintained ollama37 Documentation
+- Added Support for New Model:
+    - Gemma3n
 - [List other significant changes]"
+ollama: 4ff8a691
+llama.cpp: b5359
+```
+
+### Generating Version Strings
+
+To retrieve the upstream `ollama` commit and `llama.cpp` commit for the message above:
+
+```bash
+# Get Ollama Hash
+git fetch upstream > /dev/null
+echo "ollama: $(git rev-parse --short upstream/main)"
+
+# Get llama.cpp Commit (from vendored build-info)
+echo "llama.cpp: $(grep 'LLAMA_COMMIT' llama/build-info.cpp | cut -d'"' -f2 | cut -c1-8)"
 ```
 
 ### 7. Test the Build

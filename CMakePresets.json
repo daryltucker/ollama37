@@ -39,8 +39,20 @@
         "CUDA"
       ],
       "cacheVariables": {
-        "CMAKE_CUDA_ARCHITECTURES": "50;60;61;70;75;80;86;87;89;90;90a;120",
-        "CMAKE_CUDA_FLAGS": "-Wno-deprecated-gpu-targets -t 2"
+        "CMAKE_CUDA_ARCHITECTURES": "50;52;60;61;70;75;80;86;89;90;90a;120",
+        "CMAKE_CUDA_FLAGS": "-Wno-deprecated-gpu-targets -t 2",
+        "OLLAMA_RUNNER_DIR": "cuda_v12"
+      }
+    },
+    {
+      "name": "CUDA 13",
+      "inherits": [
+        "CUDA"
+      ],
+      "cacheVariables": {
+        "CMAKE_CUDA_ARCHITECTURES": "75-virtual;80-virtual;86-virtual;87-virtual;89-virtual;90-virtual;90a-virtual;100-virtual;103-virtual;110-virtual;120-virtual;121-virtual",
+        "CMAKE_CUDA_FLAGS": "-t 2",
+        "OLLAMA_RUNNER_DIR": "cuda_v13"
       }
     },
     {
@@ -49,7 +61,8 @@
         "CUDA"
       ],
       "cacheVariables": {
-        "CMAKE_CUDA_ARCHITECTURES": "72;87"
+        "CMAKE_CUDA_ARCHITECTURES": "72;87",
+        "OLLAMA_RUNNER_DIR": "cuda_jetpack5"
       }
     },
     {
@@ -58,7 +71,8 @@
         "CUDA"
       ],
       "cacheVariables": {
-        "CMAKE_CUDA_ARCHITECTURES": "87"
+        "CMAKE_CUDA_ARCHITECTURES": "87",
+        "OLLAMA_RUNNER_DIR": "cuda_jetpack6"
       }
     },
     {
@@ -77,7 +91,17 @@
       ],
       "cacheVariables": {
         "CMAKE_HIP_FLAGS": "-parallel-jobs=4",
-        "AMDGPU_TARGETS": "gfx900;gfx940;gfx941;gfx942;gfx1010;gfx1012;gfx1030;gfx1100;gfx1101;gfx1102;gfx1151;gfx1200;gfx1201;gfx906:xnack-;gfx908:xnack-;gfx90a:xnack+;gfx90a:xnack-"
+        "AMDGPU_TARGETS": "gfx940;gfx941;gfx942;gfx1010;gfx1012;gfx1030;gfx1100;gfx1101;gfx1102;gfx1151;gfx1200;gfx1201;gfx908:xnack-;gfx90a:xnack+;gfx90a:xnack-",
+        "OLLAMA_RUNNER_DIR": "rocm"
+      }
+    },
+    {
+      "name": "Vulkan",
+      "inherits": [
+        "Default"
+      ],
+      "cacheVariables": {
+        "OLLAMA_RUNNER_DIR": "vulkan"
       }
     }
   ],
@@ -102,11 +126,25 @@
       ]
     },
     {
+      "name": "CUDA 11",
+      "inherits": [
+        "CUDA"
+      ],
+      "configurePreset": "CUDA 11"
+    },
+    {
       "name": "CUDA 12",
       "inherits": [
         "CUDA"
       ],
       "configurePreset": "CUDA 12"
+    },
+    {
+      "name": "CUDA 13",
+      "inherits": [
+        "CUDA"
+      ],
+      "configurePreset": "CUDA 13"
     },
     {
       "name": "JetPack 5",
@@ -135,6 +173,13 @@
         "ROCm"
       ],
       "configurePreset": "ROCm 6"
+    },
+    {
+      "name": "Vulkan",
+      "targets": [
+        "ggml-vulkan"
+      ],
+      "configurePreset": "Vulkan"
     }
   ]
 }

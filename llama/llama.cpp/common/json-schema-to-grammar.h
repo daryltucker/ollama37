@@ -1,9 +1,9 @@
 #pragma once
 
-#include "ggml.h"
-// Change JSON_ASSERT from assert() to GGML_ASSERT:
-#define JSON_ASSERT GGML_ASSERT
-#include "json.hpp"
+#include <nlohmann/json_fwd.hpp>
+
+#include <functional>
+#include <string>
 
 std::string json_schema_to_grammar(const nlohmann::ordered_json & schema,
                                    bool force_gbnf = false);
@@ -17,5 +17,7 @@ struct common_grammar_builder {
 struct common_grammar_options {
     bool dotall = false;
 };
+
+std::string gbnf_format_literal(const std::string & literal);
 
 std::string build_grammar(const std::function<void(const common_grammar_builder &)> & cb, const common_grammar_options & options = {});
