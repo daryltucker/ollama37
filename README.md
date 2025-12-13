@@ -34,6 +34,8 @@ services:
 docker-compose up -d
 ```
 
+[Manual install instructions](https://docs.ollama.com/linux#manual-install)
+
 ## Usage
 
 ### Run Your First Model
@@ -112,17 +114,8 @@ docker build -f ollama37.Dockerfile -t ollama37 .
 ### Manual Build
 For detailed manual compilation instructions including CUDA 11.4, GCC 10, and CMake setup, see our [Manual Build Guide](docs/manual-build.md).
 
-## Contributing
+## Custom Models
 
-Found an issue or want to contribute? Check our [GitHub issues](https://github.com/dogkeeper886/ollama37/issues) or submit Tesla K80-specific bug reports and compatibility fixes.
-
-## License
-
-Same license as upstream Ollama. See LICENSE file for details.
-
-## Advanced Usage
-
-### Custom Models
 ```shell
 # Import GGUF model
 ollama create custom-model -f Modelfile
@@ -134,7 +127,7 @@ SYSTEM "You are a helpful Tesla K80 expert."' > Modelfile
 ollama create tesla-expert -f Modelfile
 ```
 
-### CLI Commands
+## CLI Commands
 ```shell
 ollama list              # List models
 ollama show llama3.2     # Model info  
@@ -143,9 +136,16 @@ ollama stop llama3.2    # Stop model
 ollama serve            # Start server
 ```
 
-### Libraries & Community
+## Libraries & Community
 - [ollama-python](https://github.com/ollama/ollama-python) | [ollama-js](https://github.com/ollama/ollama-js)
 - [Discord](https://discord.gg/ollama) | [Reddit](https://reddit.com/r/ollama)
 
 See [API documentation](./docs/api.md) for complete REST API reference.
 
+## Contributing
+
+Found an issue or want to contribute? Check our [GitHub issues](https://github.com/dogkeeper886/ollama37/issues) or submit Tesla K80-specific bug reports and compatibility fixes.
+
+## License
+
+Same license as upstream Ollama. See LICENSE file for details.

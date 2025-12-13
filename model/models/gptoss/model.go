@@ -265,4 +265,5 @@ func New(c fs.Config) (model.Model, error) {
 
 func init() {
 	model.Register("gptoss", New)
+	model.Register("gpt-oss", New)
 }
